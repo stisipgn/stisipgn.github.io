@@ -1,51 +1,108 @@
 <!DOCTYPE html>
 <html lang="id">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Lookup NPM</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lookup NPM Mahasiswa</title>
   <style>
-    body { font-family: sans-serif; padding: 1rem; }
-    input { padding: 8px; width: 100%; max-width: 320px; margin-bottom: 1rem; }
-    .result { background: #f3f4f6; padding: 1rem; border-radius: 8px; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #fafafa;
+      padding: 1.5rem;
+      color: #111;
+    }
+    h2 {
+      font-size: 1.2rem;
+      margin-bottom: 1rem;
+      color: #333;
+    }
+    input {
+      width: 100%;
+      max-width: 340px;
+      padding: 10px;
+      border-radius: 8px;
+      border: 1px solid #ccc;
+      margin-bottom: 1rem;
+      font-size: 1rem;
+    }
+    .result {
+      background: #f3f4f6;
+      border-radius: 8px;
+      padding: 1rem;
+      min-height: 60px;
+      transition: all 0.3s ease;
+    }
+    .error {
+      color: #b91c1c;
+      background: #fee2e2;
+      border: 1px solid #fecaca;
+    }
+    .loading {
+      color: #6b7280;
+      font-style: italic;
+    }
   </style>
 </head>
 <body>
-  <h2>Cari Mahasiswa Berdasarkan NPM</h2>
-  <input id="npm" placeholder="Masukkan NPM..." />
-  <div id="hasil" class="result"></div>
+  <h2>🔍 Cari Mahasiswa Berdasarkan NPM</h2>
+  <input id="npm" placeholder="Masukkan NPM atau nama mahasiswa..." autocomplete="off" />
+  <div id="hasil" class="result">Belum ada pencarian.</div>
 
   <script>
     const hasil = document.getElementById("hasil");
-    const npmInput = document.getElementById("npm");
+    const input = document.getElementById("npm");
+    let debounceTimer = null;
 
-    npmInput.addEventListener("blur", async () => {
-      const npm = npmInput.value.trim();
-      if (!npm) return;
+    input.addEventListener("input", () => {
+      clearTimeout(debounceTimer);
+      const keyword = input.value.trim();
+      if (!keyword) {
+        hasil.textContent = "Belum ada pencarian.";
+        return;
+      }
 
-      hasil.textContent = "🔍 Mencari data...";
+      hasil.textContent = "🔎 Mencari...";
+      hasil.classList.add("loading");
+
+      debounceTimer = setTimeout(() => cariMahasiswa(keyword), 600);
+    });
+
+    async function cariMahasiswa(keyword) {
       try {
-        const res = await fetch(`https://api.example.com/mahasiswa?npm=${npm}`);
+        const res = await fetch(`https://api-pddikti.ridwaanhall.com/search/mhs/${encodeURIComponent(keyword)}`);
         const data = await res.json();
 
-        if (data.mahasiswa?.length) {
-          const m = data.mahasiswa[0];
-          hasil.innerHTML = `
-            <b>${m.nama}</b><br>
-            ${m.nama_prodi}<br>
-            ${m.nama_pt}
-          `;
-
-          // kirim balik ke Jotform
-          parent.postMessage({ field: "nama", value: m.nama }, "*");
-        } else {
-          hasil.textContent = "❌ NPM tidak ditemukan.";
+        hasil.classList.remove("loading");
+        if (!data.mahasiswa || data.mahasiswa.length === 0) {
+          hasil.classList.add("error");
+          hasil.textContent = "❌ Data tidak ditemukan.";
+          return;
         }
+
+        const m = data.mahasiswa[0];
+        hasil.classList.remove("error");
+        hasil.innerHTML = `
+          <b>${m.nama}</b><br>
+          NPM: ${m.nim}<br>
+          ${m.nama_prodi}<br>
+          ${m.nama_pt}
+        `;
+
+        // kirim hasil ke Jotform jika embed di form
+        parent.postMessage({ 
+          type: "npmLookupResult",
+          nama: m.nama,
+          npm: m.nim,
+          prodi: m.nama_prodi,
+          kampus: m.nama_pt 
+        }, "*");
+
       } catch (err) {
-        hasil.textContent = "⚠️ Gagal memuat data. Periksa koneksi atau API.";
         console.error(err);
+        hasil.classList.add("error");
+        hasil.textContent = "⚠️ Terjadi kesalahan saat mengambil data.";
       }
-    });
+    }
   </script>
 </body>
 </html>

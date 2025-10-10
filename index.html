@@ -1,108 +1,59 @@
-<!DOCTYPE html>
-<html lang="id">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Lookup NPM Mahasiswa</title>
-  <style>
-    body {
-      font-family: system-ui, sans-serif;
-      background: #fafafa;
-      padding: 1.5rem;
-      color: #111;
+<input id="npm" placeholder="Masukkan NPM..." />
+<div id="result"></div>
+
+<script>
+const input = document.getElementById('npm');
+const result = document.getElementById('result');
+
+input.addEventListener('input', async e => {
+  const keyword = e.target.value.trim();
+  if (keyword.length < 4) return (result.innerHTML = '');
+
+  try {
+    const res = await fetch(`https://api-pddikti.ridwaanhall.com/search/mhs/${keyword}`);
+    const data = await res.json();
+
+    if (data.length === 0) {
+      result.innerHTML = '❌ Data tidak ditemukan.';
+      return;
     }
-    h2 {
-      font-size: 1.2rem;
-      margin-bottom: 1rem;
-      color: #333;
+
+    // Coba filter exact match dulu
+    const exact = data.find(d => d.nim === keyword);
+    if (exact) {
+      result.innerHTML = `
+        <b>${exact.nama}</b><br>
+        NIM: ${exact.nim}<br>
+        Prodi: ${exact.nama_prodi}<br>
+        PT: ${exact.nama_pt}
+      `;
+      return;
     }
-    input {
-      width: 100%;
-      max-width: 340px;
-      padding: 10px;
-      border-radius: 8px;
-      border: 1px solid #ccc;
-      margin-bottom: 1rem;
-      font-size: 1rem;
-    }
-    .result {
-      background: #f3f4f6;
-      border-radius: 8px;
-      padding: 1rem;
-      min-height: 60px;
-      transition: all 0.3s ease;
-    }
-    .error {
-      color: #b91c1c;
-      background: #fee2e2;
-      border: 1px solid #fecaca;
-    }
-    .loading {
-      color: #6b7280;
-      font-style: italic;
-    }
-  </style>
-</head>
-<body>
-  <h2>🔍 Cari Mahasiswa Berdasarkan NPM</h2>
-  <input id="npm" placeholder="Masukkan NPM atau nama mahasiswa..." autocomplete="off" />
-  <div id="hasil" class="result">Belum ada pencarian.</div>
 
-  <script>
-    const hasil = document.getElementById("hasil");
-    const input = document.getElementById("npm");
-    let debounceTimer = null;
+    // Kalau tidak ada exact match, tampilkan daftar
+    result.innerHTML = `
+      <p>⚠️ Ditemukan ${data.length} hasil, pilih salah satu:</p>
+      <ul>
+        ${data
+          .map(
+            d =>
+              `<li onclick="selectData('${d.nim}', '${d.nama}', '${d.nama_prodi}', '${d.nama_pt}')">
+                ${d.nim} — ${d.nama} (${d.nama_prodi})
+              </li>`
+          )
+          .join('')}
+      </ul>`;
+  } catch (err) {
+    result.innerHTML = '⚠️ Gagal memuat data.';
+  }
+});
 
-    input.addEventListener("input", () => {
-      clearTimeout(debounceTimer);
-      const keyword = input.value.trim();
-      if (!keyword) {
-        hasil.textContent = "Belum ada pencarian.";
-        return;
-      }
-
-      hasil.textContent = "🔎 Mencari...";
-      hasil.classList.add("loading");
-
-      debounceTimer = setTimeout(() => cariMahasiswa(keyword), 600);
-    });
-
-    async function cariMahasiswa(keyword) {
-      try {
-        const res = await fetch(`https://api-pddikti.ridwaanhall.com/search/mhs/${encodeURIComponent(keyword)}`);
-        const data = await res.json();
-
-        hasil.classList.remove("loading");
-        if (!data.mahasiswa || data.mahasiswa.length === 0) {
-          hasil.classList.add("error");
-          hasil.textContent = "❌ Data tidak ditemukan.";
-          return;
-        }
-
-        const m = data.mahasiswa[0];
-        hasil.classList.remove("error");
-        hasil.innerHTML = `
-          <b>${m.nama}</b><br>
-          NPM: ${m.nim}<br>
-          ${m.nama_prodi}<br>
-          ${m.nama_pt}
-        `;
-
-        // kirim hasil ke Jotform jika embed di form
-        parent.postMessage({ 
-          type: "npmLookupResult",
-          nama: m.nama,
-          npm: m.nim,
-          prodi: m.nama_prodi,
-          kampus: m.nama_pt 
-        }, "*");
-
-      } catch (err) {
-        console.error(err);
-        hasil.classList.add("error");
-        hasil.textContent = "⚠️ Terjadi kesalahan saat mengambil data.";
-      }
-    }
-  </script>
-</body>
-</html>
+function selectData(nim, nama, prodi, pt) {
+  result.innerHTML = `
+    <b>${nama}</b><br>
+    NIM: ${nim}<br>
+    Prodi: ${prodi}<br>
+    PT: ${pt}
+  `;
+}
+</script>

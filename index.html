@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lookup NPM</title>
+  <style>
+    body { font-family: sans-serif; padding: 1rem; }
+    input { padding: 8px; width: 100%; max-width: 320px; margin-bottom: 1rem; }
+    .result { background: #f3f4f6; padding: 1rem; border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <h2>Cari Mahasiswa Berdasarkan NPM</h2>
+  <input id="npm" placeholder="Masukkan NPM..." />
+  <div id="hasil" class="result"></div>
+
+  <script>
+    const hasil = document.getElementById("hasil");
+    const npmInput = document.getElementById("npm");
+
+    npmInput.addEventListener("blur", async () => {
+      const npm = npmInput.value.trim();
+      if (!npm) return;
+
+      hasil.textContent = "🔍 Mencari data...";
+      try {
+        const res = await fetch(`https://api.example.com/mahasiswa?npm=${npm}`);
+        const data = await res.json();
+
+        if (data.mahasiswa?.length) {
+          const m = data.mahasiswa[0];
+          hasil.innerHTML = `
+            <b>${m.nama}</b><br>
+            ${m.nama_prodi}<br>
+            ${m.nama_pt}
+          `;
+
+          // kirim balik ke Jotform
+          parent.postMessage({ field: "nama", value: m.nama }, "*");
+        } else {
+          hasil.textContent = "❌ NPM tidak ditemukan.";
+        }
+      } catch (err) {
+        hasil.textContent = "⚠️ Gagal memuat data. Periksa koneksi atau API.";
+        console.error(err);
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,21 +1,24 @@
-name: Linux_CRD_Remote
+name: Linux_CRD_Tailscale_Remote
 
 on:
   workflow_dispatch:
 
 jobs:
-  crd:
+  crd-remote:
     runs-on: ubuntu-latest
-    timeout-minutes: 2000 
+    timeout-minutes: 2000  # ≈33 jam aktif nonstop
 
     steps:
-      - name: System Info
+      - name: 🧠 System Info
         run: |
           echo "=== 🐧 System Info ==="
           lsb_release -a || cat /etc/os-release
           uname -a
+          df -h
+          echo "======================="
 
-      - name: Install XFCE + Chrome Remote Desktop
+      # 🖥️ Install Desktop + CRD dependencies
+      - name: 🧩 Install XFCE + Chrome Remote Desktop
         run: |
           sudo apt update
           sudo DEBIAN_FRONTEND=noninteractive apt install -y \
@@ -30,39 +33,44 @@ jobs:
 
           echo "✅ Chrome Remote Desktop installed!"
 
-      - name: Install Google Chrome
+      # 🌐 Optional: install Google Chrome
+      - name: 🌍 Install Google Chrome
         run: |
+          echo "⬇️ Installing Google Chrome browser..."
           wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
           sudo apt install -y ./google-chrome-stable_current_amd64.deb
           rm google-chrome-stable_current_amd64.deb
           echo "✅ Google Chrome installed!"
 
-      - name: Create CRD User
+      # 👤 Create CRD User
+      - name: 👤 Create User for Remote Desktop
         run: |
-          echo "👤 Creating CRD user..."
-          sudo useradd -m crduser
+          echo "Creating CRD user..."
+          sudo useradd -m crduser || true
           PASSWORD=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
           echo "crduser:$PASSWORD" | sudo chpasswd
           sudo usermod -aG sudo crduser
           echo "CRD_PASS=$PASSWORD" >> $GITHUB_ENV
-          echo "✅ User created with password: $PASSWORD"
+          echo "✅ User 'crduser' created with password: $PASSWORD"
 
-      - name: Setup Chrome Remote Desktop
+      # 🧩 Setup Chrome Remote Desktop
+      - name: 🧩 Configure Chrome Remote Desktop
         env:
           CRD_AUTH_CODE: ${{ secrets.CRD_AUTH_CODE }}
         run: |
           echo "🧠 Configuring Chrome Remote Desktop..."
+          sudo groupadd chrome-remote-desktop || true
           sudo usermod -a -G chrome-remote-desktop crduser
           sudo -u crduser bash -c "echo xfce4-session > ~/.chrome-remote-desktop-session"
           sudo systemctl disable lightdm.service || true
 
           if [ -z "$CRD_AUTH_CODE" ]; then
             echo "⚠️ Missing CRD_AUTH_CODE secret!"
-            echo "Generate from https://remotedesktop.google.com/headless"
+            echo "Please generate from: https://remotedesktop.google.com/headless"
             exit 1
           fi
 
-          # Jalankan CRD setup
+          echo "🚀 Starting CRD host..."
           DISPLAY= /opt/google/chrome-remote-desktop/start-host \
             --code="$CRD_AUTH_CODE" \
             --redirect-url="https://remotedesktop.google.com/_/oauthredirect" \
@@ -70,22 +78,48 @@ jobs:
 
           echo "✅ CRD linked successfully!"
 
-      - name: Access Info
+      # 🔒 (Optional) Install and connect Tailscale
+      - name: 🔒 Setup Tailscale (Optional)
+        if: ${{ secrets.TAILSCALE_AUTH_KEY != '' }}
+        env:
+          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          echo "⬇️ Installing Tailscale..."
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg | \
+            sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list | \
+            sudo tee /etc/apt/sources.list.d/tailscale.list
+          sudo apt update && sudo apt install -y tailscale
+
+          echo "🚀 Starting Tailscale..."
+          sudo tailscaled & sleep 5
+          sudo tailscale up --authkey=${TS_AUTHKEY} --hostname=crd-${{ github.run_id }} --accept-dns=false
+          TAILSCALE_IP=$(sudo tailscale ip -4 | head -n 1)
+          echo "TAILSCALE_IP=$TAILSCALE_IP" >> $GITHUB_ENV
+          echo "✅ Connected to Tailscale: $TAILSCALE_IP"
+
+      # 📋 Show connection info
+      - name: 📋 Display Access Info
         run: |
           echo "=============================================="
           echo "🎉 Chrome Remote Desktop Setup Complete!"
-          echo "Login with the SAME Google account you used for setup."
+          echo "Login with SAME Google Account you used to create the CRD auth code."
           echo "----------------------------------------------"
           echo "Username : crduser"
           echo "Password : $CRD_PASS"
-          echo "URL      : https://remotedesktop.google.com/access"
+          echo "Access   : https://remotedesktop.google.com/access"
           echo "----------------------------------------------"
-          echo "💡 Session will stay active for up to 2000 minutes."
+          if [ -n "$TAILSCALE_IP" ]; then
+            echo "🔗 Optional Private Access via Tailscale:"
+            echo "  SSH   : ssh crduser@$TAILSCALE_IP"
+            echo "  IP    : $TAILSCALE_IP"
+          fi
           echo "=============================================="
 
-      - name: Keep Alive
+      # 💤 Keep runner alive for GUI session
+      - name: 💤 Keep Alive
         run: |
           while true; do
-            echo "[$(date)] 🟢 CRD Session Active"
+            echo "[$(date)] 🟢 CRD session active..."
             sleep 300
           done

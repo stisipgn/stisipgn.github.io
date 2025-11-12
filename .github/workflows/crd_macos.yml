@@ -1,0 +1,68 @@
+name: CRD_macOS_Remote_Access
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup-macos-crd:
+    runs-on: macos-latest
+    timeout-minutes: 2000
+
+    steps:
+      - name: 🍏 System Info
+        run: |
+          echo "=== 🍎 macOS Environment Info ==="
+          sw_vers
+          uname -a
+          echo "================================="
+
+      - name: 📦 Install Chrome Remote Desktop
+        run: |
+          curl -fsSL -o crd.pkg https://dl.google.com/chrome-remote-desktop/chrome-remote-desktop_current_amd64.pkg
+          sudo installer -pkg crd.pkg -target /
+          rm crd.pkg
+          echo "✅ CRD installed!"
+
+      - name: 👤 Create Remote User
+        run: |
+          USERNAME="remoteuser"
+          PASSWORD=$(openssl rand -base64 10)
+          sudo sysadminctl -addUser "$USERNAME" -password "$PASSWORD"
+          sudo dscl . -append /Groups/admin GroupMembership "$USERNAME"
+          echo "CRD_USER=$USERNAME" >> $GITHUB_ENV
+          echo "CRD_PASS=$PASSWORD" >> $GITHUB_ENV
+          echo "✅ Created user $USERNAME / $PASSWORD"
+
+      - name: 🧠 Setup Chrome Remote Desktop
+        env:
+          CRD_AUTH_CODE: ${{ secrets.CRD_AUTH_CODE }}
+        run: |
+          if [ -z "$CRD_AUTH_CODE" ]; then
+            echo "❌ Missing CRD_AUTH_CODE secret!"
+            exit 1
+          fi
+          PIN=$(jot -r 1 100000 999999)
+          echo "CRD_PIN=$PIN" >> $GITHUB_ENV
+          DISPLAY= /Applications/Chrome\ Remote\ Desktop\ Host.app/Contents/MacOS/Chrome\ Remote\ Desktop\ Host \
+            --code="$CRD_AUTH_CODE" \
+            --redirect-url="https://remotedesktop.google.com/_/oauthredirect" \
+            --name="GitHub-macOS-${{ github.run_id }}" \
+            --pin="$PIN" &
+          echo "✅ CRD linked successfully! PIN: $PIN"
+
+      - name: 📋 Connection Info
+        run: |
+          echo "=============================================="
+          echo "🍏 Chrome Remote Desktop for macOS Ready!"
+          echo "User     : $CRD_USER"
+          echo "Password : $CRD_PASS"
+          echo "PIN      : $CRD_PIN"
+          echo "Access   : https://remotedesktop.google.com/access"
+          echo "=============================================="
+
+      - name: 💤 Keep Alive
+        run: |
+          while true; do
+            echo "[$(date)] 🟢 macOS CRD session active..."
+            sleep 300
+          done

@@ -16,28 +16,38 @@ jobs:
           uname -a
           echo "================================="
 
-      - name: 📦 Install Chrome Remote Desktop (Auto-detect DMG content)
+      - name: 📦 Install Chrome Remote Desktop (Fix Mount Path)
         run: |
           set -e
           echo "📦 Downloading Chrome Remote Desktop DMG..."
           curl -L -o /tmp/chromeremotedesktop.dmg "https://dl.google.com/dl/chrome-remote-desktop/chromeremotedesktop.dmg"
 
           echo "💿 Mounting DMG..."
-          MOUNT_POINT=$(hdiutil attach /tmp/chromeremotedesktop.dmg -nobrowse | grep "/Volumes/" | awk '{print $3}')
-          echo "📀 Mounted at: $MOUNT_POINT"
-          ls "$MOUNT_POINT"
+          # Gunakan hdiutil JSON output agar aman untuk nama volume dengan spasi
+          MOUNT_POINT=$(hdiutil attach /tmp/chromeremotedesktop.dmg -nobrowse -plist | \
+            plutil -extract system-entities xml1 -o - - | \
+            grep -A1 '<key>mount-point</key>' | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+          
+          if [ -z "$MOUNT_POINT" ]; then
+            echo "❌ Gagal mendapatkan mount point."
+            exit 1
+          fi
 
-          # Detect installer type (pkg or app)
+          echo "📀 Mounted at: $MOUNT_POINT"
+          ls "$MOUNT_POINT" || echo "⚠️ Tidak bisa membaca isi mount, lanjut deteksi manual..."
+
+          # Deteksi .pkg atau .app
           if ls "$MOUNT_POINT"/*.pkg 1>/dev/null 2>&1; then
             PKG=$(ls "$MOUNT_POINT"/*.pkg | head -n 1)
             echo "📦 Found PKG installer: $PKG"
             sudo installer -pkg "$PKG" -target /
-          elif [ -d "$MOUNT_POINT/Chrome Remote Desktop.app" ]; then
-            echo "📦 Found App bundle. Copying to /Applications..."
-            sudo cp -R "$MOUNT_POINT/Chrome Remote Desktop.app" /Applications/
+          elif find "$MOUNT_POINT" -maxdepth 1 -name "*.app" | grep -q .; then
+            APP_PATH=$(find "$MOUNT_POINT" -maxdepth 1 -name "*.app" | head -n 1)
+            echo "📦 Found App bundle: $APP_PATH"
+            sudo cp -R "$APP_PATH" /Applications/
           else
-            echo "❌ Could not find .pkg or .app inside DMG!"
-            echo "Contents:"
+            echo "❌ Tidak ditemukan file .pkg atau .app di dalam DMG!"
+            echo "Isi volume:"
             ls -R "$MOUNT_POINT"
             exit 1
           fi
@@ -70,7 +80,6 @@ jobs:
           PIN=$(jot -r 1 100000 999999)
           echo "CRD_PIN=$PIN" >> $GITHUB_ENV
 
-          # Find host binary
           HOST_PATH="/Applications/Chrome Remote Desktop Host.app/Contents/MacOS/Chrome Remote Desktop Host"
           ALT_PATH="/Applications/Chrome Remote Desktop.app/Contents/MacOS/Chrome Remote Desktop Host"
 

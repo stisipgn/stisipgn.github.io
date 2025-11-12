@@ -16,12 +16,27 @@ jobs:
           uname -a
           echo "================================="
 
-      - name: 📦 Install Chrome Remote Desktop
+      - name: 📦 Install Chrome Remote Desktop (DMG)
         run: |
-          curl -fsSL -o crd.pkg https://dl.google.com/dl/chrome-remote-desktop/chromeremotedesktophost-47.0.2526.18.dmg
-          sudo installer -pkg crd.pkg -target /
-          rm crd.pkg
-          echo "✅ CRD installed!"
+          echo "📦 Downloading Chrome Remote Desktop DMG..."
+          curl -L -o /tmp/chromeremotedesktop.dmg "https://dl.google.com/dl/chrome-remote-desktop/chromeremotedesktop.dmg"
+
+          echo "💿 Mounting DMG..."
+          MOUNT_POINT=$(hdiutil attach /tmp/chromeremotedesktop.dmg -nobrowse | grep "/Volumes/" | awk '{print $3}')
+          if [ -z "$MOUNT_POINT" ]; then
+            echo "❌ Failed to mount DMG."
+            exit 1
+          fi
+          echo "Mounted at: $MOUNT_POINT"
+
+          echo "📥 Copying app to /Applications..."
+          sudo cp -R "$MOUNT_POINT/Chrome Remote Desktop.app" /Applications/
+
+          echo "💾 Unmounting..."
+          hdiutil detach "$MOUNT_POINT"
+          rm /tmp/chromeremotedesktop.dmg
+
+          echo "✅ Chrome Remote Desktop installed to /Applications!"
 
       - name: 👤 Create Remote User
         run: |
@@ -39,16 +54,29 @@ jobs:
         run: |
           if [ -z "$CRD_AUTH_CODE" ]; then
             echo "❌ Missing CRD_AUTH_CODE secret!"
+            echo "Get one from: https://remotedesktop.google.com/headless"
             exit 1
           fi
+
           PIN=$(jot -r 1 100000 999999)
           echo "CRD_PIN=$PIN" >> $GITHUB_ENV
-          DISPLAY= /Applications/Chrome\ Remote\ Desktop\ Host.app/Contents/MacOS/Chrome\ Remote\ Desktop\ Host \
+
+          HOST_PATH="/Applications/Chrome Remote Desktop.app/Contents/MacOS/Chrome Remote Desktop Host"
+
+          if [ ! -f "$HOST_PATH" ]; then
+            echo "❌ Host binary not found at $HOST_PATH"
+            echo "Verify the app structure via: ls -R /Applications/Chrome\\ Remote\\ Desktop.app"
+            exit 1
+          fi
+
+          echo "🚀 Registering CRD host..."
+          sudo "$HOST_PATH" \
             --code="$CRD_AUTH_CODE" \
             --redirect-url="https://remotedesktop.google.com/_/oauthredirect" \
             --name="GitHub-macOS-${{ github.run_id }}" \
             --pin="$PIN" &
-          echo "✅ CRD linked successfully! PIN: $PIN"
+
+          echo "✅ CRD link initiated! PIN: $PIN"
 
       - name: 📋 Connection Info
         run: |

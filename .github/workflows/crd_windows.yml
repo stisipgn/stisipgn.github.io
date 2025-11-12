@@ -1,0 +1,77 @@
+name: CRD_Windows_Remote_Access
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup-windows-crd:
+    runs-on: windows-latest
+    timeout-minutes: 2000  # ~33 jam
+
+    steps:
+      - name: 🧩 System Info
+        run: |
+          Write-Host "=== 🪟 Windows Environment Info ==="
+          systeminfo | findstr /B /C:"OS"
+          Write-Host "==================================="
+
+      - name: 📦 Install Chrome Remote Desktop
+        shell: pwsh
+        run: |
+          $url = "https://dl.google.com/chrome-remote-desktop/chrome-remote-desktop_current_amd64.msi"
+          $installer = "$env:TEMP\crd.msi"
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          Start-Process msiexec.exe -Wait -ArgumentList "/i `"$installer`" /qn /norestart"
+          Remove-Item $installer
+          Write-Host "✅ CRD installed successfully!"
+
+      - name: 👤 Create Remote User
+        shell: pwsh
+        run: |
+          $username = "remoteuser"
+          $password = -join ((33..126) | Get-Random -Count 10 | % {[char]$_})
+          $secure = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name $username -Password $secure -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member $username
+          "CRD_USER=$username" >> $env:GITHUB_ENV
+          "CRD_PASS=$password" >> $env:GITHUB_ENV
+          Write-Host "✅ User created: $username / $password"
+
+      - name: 🧠 Setup Chrome Remote Desktop
+        shell: pwsh
+        env:
+          CRD_AUTH_CODE: ${{ secrets.CRD_AUTH_CODE }}
+        run: |
+          if (-not $env:CRD_AUTH_CODE) {
+            Write-Error "❌ Missing CRD_AUTH_CODE secret!"
+            exit 1
+          }
+
+          $pin = Get-Random -Minimum 100000 -Maximum 999999
+          "CRD_PIN=$pin" >> $env:GITHUB_ENV
+
+          $cmd = @"
+          `"C:\Program Files (x86)\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe`" --code=`"$env:CRD_AUTH_CODE`" --redirect-url=`"https://remotedesktop.google.com/_/oauthredirect`" --name=`"GitHub-Windows-${{ github.run_id }}`" --pin=`"$pin`"
+          "@
+          Write-Host "🚀 Registering host with CRD..."
+          Start-Process powershell -Verb RunAs -Wait -ArgumentList "-Command $cmd"
+          Write-Host "✅ CRD linked successfully! PIN: $pin"
+
+      - name: 📋 Connection Info
+        shell: pwsh
+        run: |
+          Write-Host "=============================================="
+          Write-Host "🪟 Chrome Remote Desktop for Windows Ready!"
+          Write-Host "User     : $env:CRD_USER"
+          Write-Host "Password : $env:CRD_PASS"
+          Write-Host "PIN      : $env:CRD_PIN"
+          Write-Host "Access   : https://remotedesktop.google.com/access"
+          Write-Host "=============================================="
+
+      - name: 💤 Keep Alive
+        shell: pwsh
+        run: |
+          while ($true) {
+            Write-Host "[$(Get-Date)] 🟢 Windows CRD session active..."
+            Start-Sleep -Seconds 300
+          }

@@ -1,53 +1,43 @@
-name: Linux_GUI_Remote_Cloud
+name: Linux_GUI_Remote
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # bisa dijalankan manual dari tab Actions
 
 jobs:
   linux-vnc:
     runs-on: ubuntu-latest
-    timeout-minutes: 2000  # 🕒 ~33 jam runtime
+    timeout-minutes: 2000  # sekitar 33 jam maksimum aktif
 
     steps:
-      - name: Show System Info
+      - name: System Info
         run: |
-          echo "=== Ubuntu Info ==="
+          echo "=== 🐧 System Info ==="
           lsb_release -a || cat /etc/os-release
           uname -a
-          echo "==================="
+          df -h
+          echo "====================="
 
-      - name: Install XFCE Desktop + VNC Server
+      # 🧩 Install desktop + VNC + Tailscale
+      - name: Install XFCE, VNC, and Tailscale
         run: |
-          echo "📦 Installing XFCE desktop environment..."
-          sudo apt-get update -y
-          sudo apt-get install -y xfce4 xfce4-goodies tightvncserver dbus-x11
-          
-          echo "🧰 Installing Tailscale..."
-          curl -fsSL https://tailscale.com/install.sh | sh
-          
-          echo "🧹 Cleaning apt cache..."
-          sudo apt-get clean
+          sudo apt-get update
+          sudo apt-get install -y xfce4 xfce4-goodies tightvncserver curl
 
-      - name: Start Tailscale
-        run: |
-          echo "🚀 Starting Tailscale daemon..."
-          sudo tailscaled &
+          echo "⬇️ Installing Tailscale..."
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.noarmor.gpg | sudo tee /usr/share/keyrings/tailscale-archive-keyring.gpg >/dev/null
+          curl -fsSL https://pkgs.tailscale.com/stable/ubuntu/noble.tailscale-keyring.list | sudo tee /etc/apt/sources.list.d/tailscale.list
+          sudo apt-get update
+          sudo apt-get install -y tailscale
+          echo "✅ Installation complete!"
 
-      - name: Connect to Tailscale
-        env:
-          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
-        run: |
-          sleep 5
-          echo "🔗 Connecting to Tailscale..."
-          sudo tailscale up --authkey=${TS_AUTHKEY} --hostname=ubuntu-gh-${{ github.run_id }} --accept-dns=false
-          echo "TAILSCALE_IP=$(tailscale ip -4)" >> $GITHUB_ENV
-          echo "✅ Connected to Tailscale!"
-
+      # 👤 Create VNC User
       - name: Setup VNC User
         run: |
           echo "👤 Creating VNC user..."
-          sudo useradd -m vncuser
-          PASSWORD=$(openssl rand -base64 8)
+          sudo useradd -m vncuser || true
+          
+          # ✅ generate alphanumeric password (8 chars)
+          PASSWORD=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
           echo "vncuser:$PASSWORD" | sudo chpasswd
           echo "VNC_USER=vncuser" >> $GITHUB_ENV
           echo "VNC_PASS=$PASSWORD" >> $GITHUB_ENV
@@ -57,35 +47,59 @@ jobs:
           echo "xfce4-session &" | sudo tee /home/vncuser/.vnc/xstartup > /dev/null
           sudo chmod +x /home/vncuser/.vnc/xstartup
 
-          echo "✅ VNC user created."
+          # ✅ Set VNC password file (no prompt)
+          echo "$PASSWORD" | vncpasswd -f | sudo tee /home/vncuser/.vnc/passwd > /dev/null
+          sudo chmod 600 /home/vncuser/.vnc/passwd
+          sudo chown -R vncuser:vncuser /home/vncuser/.vnc
 
+          echo "✅ VNC user created and password set."
+
+      # 🧠 Start Tailscale
+      - name: Start and Connect Tailscale
+        env:
+          TS_AUTHKEY: ${{ secrets.TAILSCALE_AUTH_KEY }}
+        run: |
+          echo "🚀 Starting Tailscale..."
+          sudo tailscaled & sleep 3
+          sudo tailscale up --authkey=${TS_AUTHKEY} --hostname=linux-vnc-${{ github.run_id }} --accept-dns=false
+          TS_IP=$(sudo tailscale ip -4 | head -n1)
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+          echo "✅ Tailscale connected at $TS_IP"
+
+      # 🖥️ Start VNC Server
       - name: Start VNC Server
         run: |
           echo "🖥️ Starting VNC server for user $VNC_USER..."
           sudo -u vncuser vncserver :1 -geometry 1280x800 -depth 24
           echo "✅ VNC running on port 5901"
 
-      - name: Firewall & Network Setup
+      # 🔥 Firewall (optional but safe)
+      - name: Configure Firewall for VNC
         run: |
-          echo "🔒 Opening VNC port..."
-          sudo ufw allow 5901/tcp || true
-          echo "✅ Firewall updated."
+          sudo ufw allow 5901/tcp
+          sudo ufw allow 22/tcp
+          sudo ufw reload || true
+          echo "✅ Firewall configured."
 
-      - name: Show Connection Info
+      # ✅ Show connection info
+      - name: Display Access Info
         run: |
-          echo "====================================="
-          echo "🐧 Linux GUI Remote is READY!"
-          echo "Connect using any VNC viewer:"
-          echo "Address : $TAILSCALE_IP:5901"
-          echo "Username: $VNC_USER"
-          echo "Password: $VNC_PASS"
-          echo "====================================="
+          echo "=============================================="
+          echo "🎉 Linux GUI Remote Ready via Tailscale"
+          echo "🔗 Connect with any VNC client using:"
+          echo "    Address : $TAILSCALE_IP:5901"
+          echo "    Username: $VNC_USER"
+          echo "    Password: $VNC_PASS"
+          echo "----------------------------------------------"
           echo "💡 On Windows: use RealVNC / TightVNC"
-          echo "💡 On Linux : use Remmina / Vinagre"
-          echo "💡 On macOS : Finder → Go → Connect to Server → vnc://$TAILSCALE_IP:5901"
-          echo "====================================="
-          echo "💤 Keeping session alive..."
-          for i in {1..400}; do
-            echo "[$(date)] VNC active at $TAILSCALE_IP (iteration $i/400)"
+          echo "💡 On Linux  : use Remmina / Vinagre"
+          echo "💡 On macOS  : Finder → Go → Connect to Server → vnc://$TAILSCALE_IP:5901"
+          echo "=============================================="
+
+      # 💤 Keep alive
+      - name: Keep Session Alive
+        run: |
+          while true; do
+            echo "[$(date)] 🟢 Linux GUI via VNC alive at $TAILSCALE_IP:5901"
             sleep 300
           done

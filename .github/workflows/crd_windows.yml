@@ -18,7 +18,7 @@ jobs:
       - name: 📦 Install Chrome Remote Desktop
         shell: pwsh
         run: |
-          $url = "https://dl.google.com/chrome-remote-desktop/chrome-remote-desktop_current_amd64.msi"
+          $url = "http://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi"
           $installer = "$env:TEMP\crd.msi"
           Invoke-WebRequest -Uri $url -OutFile $installer
           Start-Process msiexec.exe -Wait -ArgumentList "/i `"$installer`" /qn /norestart"

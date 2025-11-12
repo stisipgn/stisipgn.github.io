@@ -1,70 +1,64 @@
-name: Linux_onur
+name: CRD_Linux_Remote_Access
 
 on:
   workflow_dispatch:
 
 jobs:
-  crd-remote:
+  setup-linux-crd:
     runs-on: ubuntu-latest
     timeout-minutes: 2000
 
     steps:
-      - name: 🧠 System Info
+      - name: 🧩 System Info
         run: |
-          lsb_release -a || cat /etc/os-release
+          echo "=== 🐧 Linux Environment Info ==="
+          cat /etc/os-release
           uname -a
+          echo "================================="
 
-      - name: 🧩 Install XFCE + Chrome Remote Desktop
+      - name: 📦 Install XFCE + Chrome Remote Desktop
         run: |
           sudo apt update
-          sudo DEBIAN_FRONTEND=noninteractive apt install -y \
-            xfce4 xfce4-goodies dbus-x11 x11-xserver-utils wget curl sudo
-
-          echo "⬇️ Installing Chrome Remote Desktop..."
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y xfce4 xfce4-goodies dbus-x11 x11-xserver-utils wget curl sudo
           wget https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
           sudo apt install -y ./chrome-remote-desktop_current_amd64.deb
           rm chrome-remote-desktop_current_amd64.deb
-          echo "✅ Chrome Remote Desktop installed!"
+          echo "✅ CRD installed!"
 
-      - name: 👤 Create CRD user
+      - name: 👤 Create Remote User
         run: |
-          sudo useradd -m crduser || true
+          sudo useradd -m remoteuser || true
           PASSWORD=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
-          echo "crduser:$PASSWORD" | sudo chpasswd
-          sudo usermod -aG sudo crduser
+          echo "remoteuser:$PASSWORD" | sudo chpasswd
+          sudo usermod -aG sudo remoteuser
           echo "CRD_PASS=$PASSWORD" >> $GITHUB_ENV
-          echo "✅ User created: crduser / $PASSWORD"
+          echo "✅ User created: remoteuser / $PASSWORD"
 
-      - name: 🧠 Configure Chrome Remote Desktop (with PIN)
+      - name: 🧠 Setup Chrome Remote Desktop
         env:
           CRD_AUTH_CODE: ${{ secrets.CRD_AUTH_CODE }}
         run: |
           if [ -z "$CRD_AUTH_CODE" ]; then
-            echo "⚠️ Missing CRD_AUTH_CODE secret!"
+            echo "❌ Missing CRD_AUTH_CODE secret!"
             exit 1
           fi
-
           PIN=$(shuf -i 100000-999999 -n 1)
           echo "CRD_PIN=$PIN" >> $GITHUB_ENV
-
           sudo groupadd chrome-remote-desktop || true
-          sudo usermod -a -G chrome-remote-desktop crduser
-          sudo -u crduser bash -c "echo xfce4-session > ~/.chrome-remote-desktop-session"
-
-          echo "🚀 Starting CRD setup..."
+          sudo usermod -aG chrome-remote-desktop remoteuser
+          sudo -u remoteuser bash -c "echo xfce4-session > ~/.chrome-remote-desktop-session"
           DISPLAY= /opt/google/chrome-remote-desktop/start-host \
             --code="$CRD_AUTH_CODE" \
             --redirect-url="https://remotedesktop.google.com/_/oauthredirect" \
             --name="GitHub-Linux-${{ github.run_id }}" \
             --pin="$PIN" &
-
           echo "✅ CRD linked successfully! PIN: $PIN"
 
-      - name: 📋 Show Access Info
+      - name: 📋 Connection Info
         run: |
           echo "=============================================="
-          echo "🎉 Chrome Remote Desktop Linux Ready!"
-          echo "Username : crduser"
+          echo "🐧 Chrome Remote Desktop for Linux Ready!"
+          echo "User     : remoteuser"
           echo "Password : $CRD_PASS"
           echo "PIN      : $CRD_PIN"
           echo "Access   : https://remotedesktop.google.com/access"
@@ -73,6 +67,6 @@ jobs:
       - name: 💤 Keep Alive
         run: |
           while true; do
-            echo "[$(date)] 🟢 CRD session active..."
+            echo "[$(date)] 🟢 Linux CRD session active..."
             sleep 300
           done

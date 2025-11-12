@@ -18,7 +18,7 @@ jobs:
 
       - name: 📦 Install Chrome Remote Desktop
         run: |
-          curl -fsSL -o crd.pkg https://dl.google.com/chrome-remote-desktop/chrome-remote-desktop_current_amd64.pkg
+          curl -fsSL -o crd.pkg https://dl.google.com/dl/chrome-remote-desktop/chromeremotedesktophost-47.0.2526.18.dmg
           sudo installer -pkg crd.pkg -target /
           rm crd.pkg
           echo "✅ CRD installed!"

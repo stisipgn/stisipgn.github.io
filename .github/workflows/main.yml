@@ -6,25 +6,19 @@ on:
 jobs:
   crd-remote:
     runs-on: ubuntu-latest
-    timeout-minutes: 2000  # ≈33 jam aktif nonstop
+    timeout-minutes: 2000
 
     steps:
       - name: 🧠 System Info
         run: |
-          echo "=== 🐧 System Info ==="
           lsb_release -a || cat /etc/os-release
           uname -a
-          df -h
-          echo "======================="
 
-      # 🖥️ Install XFCE Desktop + Chrome Remote Desktop
       - name: 🧩 Install XFCE + Chrome Remote Desktop
         run: |
           sudo apt update
           sudo DEBIAN_FRONTEND=noninteractive apt install -y \
-            xfce4 xfce4-goodies \
-            dbus-x11 x11-xserver-utils \
-            wget curl sudo
+            xfce4 xfce4-goodies dbus-x11 x11-xserver-utils wget curl sudo
 
           echo "⬇️ Installing Chrome Remote Desktop..."
           wget https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
@@ -32,66 +26,50 @@ jobs:
           rm chrome-remote-desktop_current_amd64.deb
           echo "✅ Chrome Remote Desktop installed!"
 
-      # 🌍 (Optional) Install Google Chrome browser
-      - name: 🌍 Install Google Chrome
-        run: |
-          echo "⬇️ Installing Google Chrome..."
-          wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-          sudo apt install -y ./google-chrome-stable_current_amd64.deb
-          rm google-chrome-stable_current_amd64.deb
-          echo "✅ Google Chrome installed!"
-
-      # 👤 Create CRD user
       - name: 👤 Create CRD user
         run: |
-          echo "Creating CRD user..."
           sudo useradd -m crduser || true
           PASSWORD=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8)
           echo "crduser:$PASSWORD" | sudo chpasswd
           sudo usermod -aG sudo crduser
           echo "CRD_PASS=$PASSWORD" >> $GITHUB_ENV
-          echo "✅ User 'crduser' created with password: $PASSWORD"
+          echo "✅ User created: crduser / $PASSWORD"
 
-      # 🧩 Configure Chrome Remote Desktop
-      - name: 🧩 Setup Chrome Remote Desktop
+      - name: 🧠 Configure Chrome Remote Desktop (with PIN)
         env:
           CRD_AUTH_CODE: ${{ secrets.CRD_AUTH_CODE }}
         run: |
-          echo "🧠 Configuring Chrome Remote Desktop..."
-          
-          # ✅ Fix missing group issue
-          sudo groupadd chrome-remote-desktop || true
-          sudo usermod -a -G chrome-remote-desktop crduser
-          sudo -u crduser bash -c "echo xfce4-session > ~/.chrome-remote-desktop-session"
-          sudo systemctl disable lightdm.service || true
-
           if [ -z "$CRD_AUTH_CODE" ]; then
             echo "⚠️ Missing CRD_AUTH_CODE secret!"
-            echo "Please generate from https://remotedesktop.google.com/headless"
             exit 1
           fi
 
-          echo "🚀 Starting CRD host..."
+          PIN=$(shuf -i 100000-999999 -n 1)
+          echo "CRD_PIN=$PIN" >> $GITHUB_ENV
+
+          sudo groupadd chrome-remote-desktop || true
+          sudo usermod -a -G chrome-remote-desktop crduser
+          sudo -u crduser bash -c "echo xfce4-session > ~/.chrome-remote-desktop-session"
+
+          echo "🚀 Starting CRD setup..."
           DISPLAY= /opt/google/chrome-remote-desktop/start-host \
             --code="$CRD_AUTH_CODE" \
             --redirect-url="https://remotedesktop.google.com/_/oauthredirect" \
-            --name="GitHub-CRD-${{ github.run_id }}" &
+            --name="GitHub-Linux-${{ github.run_id }}" \
+            --pin="$PIN" &
 
-          echo "✅ CRD linked successfully!"
+          echo "✅ CRD linked successfully! PIN: $PIN"
 
-      # 📋 Show access info
-      - name: 📋 Display Access Info
+      - name: 📋 Show Access Info
         run: |
           echo "=============================================="
-          echo "🎉 Chrome Remote Desktop Ready!"
-          echo "Login with the SAME Google Account used to create the CRD code."
-          echo "----------------------------------------------"
-          echo "User     : crduser"
+          echo "🎉 Chrome Remote Desktop Linux Ready!"
+          echo "Username : crduser"
           echo "Password : $CRD_PASS"
+          echo "PIN      : $CRD_PIN"
           echo "Access   : https://remotedesktop.google.com/access"
           echo "=============================================="
 
-      # 💤 Keep alive for GUI session
       - name: 💤 Keep Alive
         run: |
           while true; do

@@ -1,4 +1,4 @@
-name: VNC_TIPSUNIX
+name: VNC_TIPSUNIX_Fixed_v2
 
 on:
   workflow_dispatch:
@@ -12,7 +12,6 @@ jobs:
       - name: Install and Configure TightVNC
         run: |
           # 1. Generate a random password for VNC
-          # Pool karakter (alphanumeric + beberapa simbol umum)
           $charPool = ([char[]](48..57) + [char[]](65..90) + [char[]](97..122) + '!', '@', '#', '$', '%', '&', '*')
           $password = -join ($charPool | Get-Random -Count 12)
           echo "VNC_PASS=$password" >> $env:GITHUB_ENV
@@ -22,21 +21,35 @@ jobs:
           $installerPath = "$env:TEMP\tightvnc.msi"
           Invoke-WebRequest -Uri $vncUrl -OutFile $installerPath
 
-          # 3. Install TightVNC silently
-          # Kita mengatur kata sandi utama dan kata sandi view-only saat instalasi
+          # 3. Install TightVNC silently (TANPA mengatur password)
           Start-Process msiexec.exe -ArgumentList @(
               "/i", "`"$installerPath`"",
               "/quiet", "/norestart",
-              "ADDLOCAL=Server",                 # Hanya install Server
-              "SERVER_REGISTER_AS_SERVICE=1",    # Jalankan sebagai service
-              "SERVER_START_SERVICE=1",          # Langsung jalankan service
-              "SERVER_SET_PASSWORD=1",           # Tanda untuk mengatur password
-              "VALUE_OF_PASSWORD=$password",     # Gunakan password acak kita
-              "VALUE_OF_VIEWONLYPASSWORD=$password" # Set view-only juga (opsional)
+              "ADDLOCAL=Server",
+              "SERVER_REGISTER_AS_SERVICE=1",
+              "SERVER_START_SERVICE=1"
           ) -Wait
 
           Remove-Item $installerPath -Force
-          Write-Host "TightVNC installed with a secure password."
+          Write-Host "TightVNC installed. Now setting password..."
+          Start-Sleep -Seconds 5 # Beri waktu installer selesai sepenuhnya
+
+          # 4. Atur password secara paksa menggunakan tvnpassword.exe
+          $tvnPassExe = "$env:ProgramFiles\TightVNC\tvnpassword.exe"
+          & $tvnPassExe /setpassword $password
+          & $tvnPassExe /setviewonlypassword $password
+
+          Write-Host "VNC password has been set via utility."
+
+      - name: Restart VNC Service
+        run: |
+          Write-Host "Restarting TightVNC service to apply password..."
+          # Hentikan layanan (paksa jika perlu)
+          Stop-Service -Name "TightVNC Server" -ErrorAction SilentlyContinue -Force
+          Start-Sleep -Seconds 3
+          # Mulai lagi layanan
+          Start-Service -Name "TightVNC Server"
+          Write-Host "VNC Service restarted successfully."
 
       - name: Configure VNC Firewall
         run: |
@@ -60,10 +73,8 @@ jobs:
 
       - name: Establish Tailscale Connection
         run: |
-          # Gunakan --authkey dari secrets
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
           
-          # Tunggu Tailscale mendapatkan IP
           $tsIP = $null
           $retries = 0
           while (-not $tsIP -and $retries -lt 10) {
@@ -94,12 +105,10 @@ jobs:
         run: |
           Write-Host "`n=== VNC ACCESS ==="
           Write-Host "http://www.youtube.com/@TipsUNIX"
-          # PERBAIKAN: Gunakan ${...} untuk memastikan PowerShell membaca variabel dengan benar
           Write-Host "Address: ${env:TAILSCALE_IP}:5900"
           Write-Host "Password: $env:VNC_PASS"
           Write-Host "==================`n"
           
-          # Jaga runner tetap aktif
           while ($true) {
             Write-Host "[$(Get-Date)] VNC Active - Use Ctrl+C in workflow to terminate"
             Start-Sleep -Seconds 300

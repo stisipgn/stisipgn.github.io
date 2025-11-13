@@ -1,70 +1,87 @@
-name: VNC_WINDOWS
+name: VNC_TIPSUNIX
 
 on:
   workflow_dispatch:
 
 jobs:
-  vnc:
+  secure-vnc:
     runs-on: windows-latest
-    timeout-minutes: 360
+    timeout-minutes: 3600
 
     steps:
-      - name: Generate Password
-        shell: bash
+      - name: Install TightVNC Server
         run: |
-          PASS=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 12)
-          echo "PASS=$PASS" >> $GITHUB_ENV
+          $url = "https://www.tightvnc.com/download/2.8.81/tightvnc-2.8.81-gpl-setup-64bit.msi"
+          $installer = "$env:TEMP\tightvnc.msi"
+          Invoke-WebRequest -Uri $url -OutFile $installer
+
+          # Generate strong password
+          $password = -join ((33..126 | ForEach-Object {[char]$_}) | Get-Random -Count 12)
+          echo "VNC_PASSWORD=$password" >> $env:GITHUB_ENV
+
+          # Install TightVNC silently
+          Start-Process msiexec.exe -ArgumentList "/i `"$installer`" /quiet /norestart", `
+            "ADDLOCAL=Server" `
+            -Wait
+          
+          # Configure TightVNC password
+          $pass = $password
+          $passBytes = [Text.Encoding]::ASCII.GetBytes($pass)
+          $key = [byte[]](0x17,0x52,0x6B,0xC2,0x4A,0x4E,0x6B,0xC2) # VNC DES key
+          $provider = New-Object System.Security.Cryptography.DESCryptoServiceProvider
+          $provider.Key = $key
+          $provider.Mode = "ECB"
+          $encryptor = $provider.CreateEncryptor()
+          $encPass = $encryptor.TransformFinalBlock($passBytes, 0, $passBytes.Length)
+
+          New-Item -Path "HKLM:\Software\TightVNC\Server" -Force | Out-Null
+          Set-ItemProperty -Path "HKLM:\Software\TightVNC\Server" -Name "ControlPassword" -Type Binary -Value $encPass
+          Set-ItemProperty -Path "HKLM:\Software\TightVNC\Server" -Name "Password" -Type Binary -Value $encPass
+          
+          # Enable VNC service
+          Set-Service -Name tvnserver -StartupType Automatic
+          Start-Service -Name tvnserver
 
       - name: Install Tailscale
         run: |
-          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
-          $msi = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $url -OutFile $msi
-          Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /quiet /norestart" -Wait
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i `"$installerPath`" /quiet /norestart" -Wait
+          Remove-Item $installerPath -Force
 
-      - name: Connect Tailscale
+      - name: Establish Tailscale Connection
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
             --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
-            --hostname=vnc-win-${{ github.run_id }}
+            --hostname=vnc-gh-$env:GITHUB_RUN_ID
 
-          $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-          echo "TSIP=$ip" >> $env:GITHUB_ENV
+          $tsIP = $null
+          for ($i = 0; $i -lt 10; $i++) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+            if ($tsIP) { break }
+            Start-Sleep -Seconds 3
+          }
 
-      - name: Install TightVNC
+          if (-not $tsIP) {
+            Write-Error "Tailscale IP not assigned"
+            exit 1
+          }
+
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Output Access Info
         run: |
-          $pass = $env:PASS
-
-          # Direct stable link from SourceForge
-          $url = "https://downloads.sourceforge.net/project/tightvnc/2.8.81/tightvnc-2.8.81-gpl-setup-64bit.msi"
-          $msi = "$env:TEMP\tvnc.msi"
-
-          Invoke-WebRequest -Uri $url -OutFile $msi
-          Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /quiet /norestart" -Wait
-
-          # TightVNC requires simple XOR encoding
-          $xorKey = 0xAA
-          $bytes = [System.Text.Encoding]::ASCII.GetBytes($pass)
-          $encoded = ($bytes | ForEach-Object { $_ -bxor $xorKey })
-          $hex = ($encoded | ForEach-Object { "{0:X2}" -f $_ }) -join ""
-
-          New-Item -Path "HKLM:\SOFTWARE\TightVNC\Server" -Force | Out-Null
-          Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "Password" -Value $hex
-          Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "AcceptRfbConnections" -Value 1
-          Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "AlwaysShared" -Value 1
-
-          Start-Service tvnserver
-          Set-Service tvnserver -StartupType Automatic
-
-      - name: Output Access
-        run: |
-          Write-Host "=== WINDOWS VNC ==="
-          Write-Host "IP: $env:TSIP:5900"
-          Write-Host "Password: $env:PASS"
+          Write-Host "=== VNC VIA TAILSCALE ==="
+          Write-Host "Connect using any VNC client:"
+          Write-Host "Address: $env:TAILSCALE_IP:5900"
+          Write-Host "Password: $env:VNC_PASSWORD"
+          Write-Host "=========================="
 
       - name: Keep Alive
         run: |
           while ($true) {
-            Write-Host "Windows VNC active at $env:TSIP"
+            Write-Host "$(Get-Date) - VNC Active"
             Start-Sleep -Seconds 300
           }

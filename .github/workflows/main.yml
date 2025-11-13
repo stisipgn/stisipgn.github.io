@@ -10,6 +10,7 @@ jobs:
 
     steps:
       - name: Generate VNC Password
+        shell: pwsh
         run: |
           Add-Type -AssemblyName System.Security
           $chars = ([char[]](33..126))
@@ -17,15 +18,17 @@ jobs:
           echo "VNC_PASS=$vncPass" >> $env:GITHUB_ENV
 
       - name: Install TigerVNC Server
+        shell: pwsh
         run: |
-          $url = "https://sourceforge.net/projects/tigervnc/files/stable/1.13.1/tigervnc-1.13.1.exe/download"
+          Write-Host "Downloading TigerVNC..."
+          $url = "https://github.com/TigerVNC/tigervnc/releases/download/v1.13.1/tigervnc64-1.13.1.exe"
           $exe = "$env:TEMP\tiger.exe"
           Invoke-WebRequest -Uri $url -OutFile $exe
 
-          # Silent install
+          Write-Host "Installing TigerVNC..."
           Start-Process $exe -ArgumentList "/silent" -Wait
 
-          # Set password in registry
+          # Registry for passwords
           $reg = "HKLM:\Software\TigerVNC\WinVNC4"
           New-Item -Path $reg -Force | Out-Null
 
@@ -34,8 +37,9 @@ jobs:
 
           Set-ItemProperty -Path $reg -Name "Password" -Value $enc
           Set-ItemProperty -Path $reg -Name "ControlPassword" -Value $enc
+          Set-ItemProperty -Path $reg -Name "AlwaysShared" -Value 1
 
-          # Enable service
+          # Enable & start service
           sc.exe config winvnc4 start= auto
           sc.exe start winvnc4
           Start-Sleep -Seconds 3
@@ -45,6 +49,7 @@ jobs:
           netsh advfirewall firewall add rule name="TigerVNC" dir=in action=allow protocol=TCP localport=5900
 
       - name: Install Tailscale
+        shell: pwsh
         run: |
           $ts = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
           $file = "$env:TEMP\ts.msi"
@@ -52,6 +57,7 @@ jobs:
           Start-Process msiexec.exe -ArgumentList "/i `"$file`" /quiet /norestart" -Wait
 
       - name: Connect Tailscale
+        shell: pwsh
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
             --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
@@ -64,13 +70,16 @@ jobs:
             if ($tsIP) { break }
             Start-Sleep -Seconds 5
           }
+
           if (-not $tsIP) {
             Write-Error "No Tailscale IPv4 assigned!"
             exit 1
           }
+
           echo "TS_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Check Port 5900
+      - name: Test VNC Port 5900
+        shell: pwsh
         run: |
           $c = Test-NetConnection -ComputerName $env:TS_IP -Port 5900
           if (-not $c.TcpTestSucceeded) {
@@ -78,7 +87,8 @@ jobs:
             exit 1
           }
 
-      - name: Output Credentials
+      - name: Output Connection Info
+        shell: pwsh
         run: |
           Write-Host "`n=== VNC ACCESS ==="
           Write-Host "IP Address : $env:TS_IP"
@@ -87,7 +97,8 @@ jobs:
           Write-Host "Viewer     : TigerVNC / RealVNC / TightVNC"
           Write-Host "===================`n"
 
-      - name: Keep Alive
+      - name: Keep Runner Alive
+        shell: pwsh
         run: |
           while ($true) {
             Write-Host "[$(Get-Date)] VNC Alive"

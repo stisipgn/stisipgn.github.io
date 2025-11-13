@@ -1,77 +1,93 @@
-name: CRD_Windows_Remote_Access
+name: VNC_TIPSUNIX
 
 on:
   workflow_dispatch:
 
 jobs:
-  setup-windows-crd:
+  vnc:
     runs-on: windows-latest
-    timeout-minutes: 2000  # ~33 jam
+    timeout-minutes: 3600
 
     steps:
-      - name: 🧩 System Info
+      - name: Prepare Desktop Session
         run: |
-          Write-Host "=== 🪟 Windows Environment Info ==="
-          systeminfo | findstr /B /C:"OS"
-          Write-Host "==================================="
+          # Enable interactive logon
+          Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server' -Name 'AllowRemoteRPC' -Value 1
+          Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name 'EnableLUA' -Value 0
 
-      - name: 📦 Install Chrome Remote Desktop
-        shell: pwsh
-        run: |
-          $url = "http://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi"
-          $installer = "$env:TEMP\crd.msi"
-          Invoke-WebRequest -Uri $url -OutFile $installer
-          Start-Process msiexec.exe -Wait -ArgumentList "/i `"$installer`" /qn /norestart"
-          Remove-Item $installer
-          Write-Host "✅ CRD installed successfully!"
+          # Restart UI service to ensure GUI session exists
+          Start-Service -Name ui0detect -ErrorAction SilentlyContinue
 
-      - name: 👤 Create Remote User
-        shell: pwsh
+      - name: Create VNC User
         run: |
-          $username = "remoteuser"
-          $password = -join ((33..126) | Get-Random -Count 10 | % {[char]$_})
+          Add-Type -AssemblyName System.Security
+
+          $chars = ([char[]](33..126)) # all visible chars for strong password
+          $password = -join (1..16 | ForEach-Object { $chars | Get-Random })
+
           $secure = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser -Name $username -Password $secure -AccountNeverExpires
-          Add-LocalGroupMember -Group "Administrators" -Member $username
-          "CRD_USER=$username" >> $env:GITHUB_ENV
-          "CRD_PASS=$password" >> $env:GITHUB_ENV
-          Write-Host "✅ User created: $username / $password"
+          New-LocalUser -Name "VNC" -Password $secure -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "VNC"
 
-      - name: 🧠 Setup Chrome Remote Desktop
-        shell: pwsh
-        env:
-          CRD_AUTH_CODE: ${{ secrets.CRD_AUTH_CODE }}
+          echo "VNC_PASS=$password" >> $env:GITHUB_ENV
+
+      - name: Download & Install UltraVNC Server
+        shell: powershell
         run: |
-          if (-not $env:CRD_AUTH_CODE) {
-            Write-Error "❌ Missing CRD_AUTH_CODE secret!"
+          $url = "https://uvnc.com/component/phocadownload/category/3-ultravnc.html?download=12:ultravnc-1506-x64"
+          $installer = "$env:TEMP\uvnc.exe"
+
+          Invoke-WebRequest -Uri $url -OutFile $installer
+
+          Start-Process -FilePath $installer `
+            -ArgumentList "/verysilent", "/norestart" `
+            -Wait
+
+      - name: Configure UltraVNC Passwords
+        run: |
+          $pass = $env:VNC_PASS
+          $hex = [System.BitConverter]::ToString([System.Text.Encoding]::ASCII.GetBytes($pass)).Replace("-", "")
+          
+          New-Item -Path "HKLM:\Software\UltraVNC" -Force | Out-Null
+          New-ItemProperty -Path "HKLM:\Software\UltraVNC" -Name "passwd" -Value $hex -PropertyType String -Force
+          New-ItemProperty -Path "HKLM:\Software\UltraVNC" -Name "passwd2" -Value $hex -PropertyType String -Force
+
+          Start-Service -Name uvnc_service
+
+      - name: Install Tailscale
+        run: |
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $msi = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $url -OutFile $msi
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$msi`"", "/quiet" -Wait
+
+      - name: Connect Tailscale
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
+            --authkey ${{ secrets.TAILSCALE_AUTH_KEY }} `
+            --hostname win-vnc-${{ github.run_id }}
+
+          $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          echo "TS_IP=$ip" >> $env:GITHUB_ENV
+
+      - name: Verify VNC
+        run: |
+          $result = Test-NetConnection -ComputerName $env:TS_IP -Port 5900
+          if (-not $result.TcpTestSucceeded) {
+            Write-Error "VNC port not accessible"
             exit 1
           }
+          Write-Host "VNC is live on $env:TS_IP:5900"
 
-          $pin = Get-Random -Minimum 100000 -Maximum 999999
-          "CRD_PIN=$pin" >> $env:GITHUB_ENV
-
-          $cmd = @"
-          `"C:\Program Files (x86)\Google\Chrome Remote Desktop\CurrentVersion\remoting_start_host.exe`" --code=`"$env:CRD_AUTH_CODE`" --redirect-url=`"https://remotedesktop.google.com/_/oauthredirect`" --name=`"GitHub-Windows-${{ github.run_id }}`" --pin=`"$pin`"
-          "@
-          Write-Host "🚀 Registering host with CRD..."
-          Start-Process powershell -Verb RunAs -Wait -ArgumentList "-Command $cmd"
-          Write-Host "✅ CRD linked successfully! PIN: $pin"
-
-      - name: 📋 Connection Info
-        shell: pwsh
+      - name: Keep Session Alive
         run: |
-          Write-Host "=============================================="
-          Write-Host "🪟 Chrome Remote Desktop for Windows Ready!"
-          Write-Host "User     : $env:CRD_USER"
-          Write-Host "Password : $env:CRD_PASS"
-          Write-Host "PIN      : $env:CRD_PIN"
-          Write-Host "Access   : https://remotedesktop.google.com/access"
-          Write-Host "=============================================="
+          Write-Host "`n=== VNC ACCESS ==="
+          Write-Host "Address  : $env:TS_IP:5900"
+          Write-Host "Username : VNC"
+          Write-Host "Password : $env:VNC_PASS"
+          Write-Host "==================`n"
 
-      - name: 💤 Keep Alive
-        shell: pwsh
-        run: |
           while ($true) {
-            Write-Host "[$(Get-Date)] 🟢 Windows CRD session active..."
-            Start-Sleep -Seconds 300
+            Write-Host "[$(Get-Date)] VNC Active"
+            Start-Sleep 300
           }

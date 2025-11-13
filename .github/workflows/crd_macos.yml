@@ -16,45 +16,18 @@ jobs:
           uname -a
           echo "================================="
 
-      - name: 📦 Install Chrome Remote Desktop
+      - name: 📦 Install Chrome Remote Desktop Host (via Homebrew Cask)
         run: |
-          set -e
-          echo "📦 Downloading Chrome Remote Desktop DMG..."
-          curl -L -o /tmp/chromeremotedesktop.dmg "https://dl.google.com/dl/chrome-remote-desktop/chromeremotedesktop.dmg"
-
-          echo "💿 Mounting DMG..."
-          # Mount dan cari mount point dengan cara yang lebih reliable
-          hdiutil attach /tmp/chromeremotedesktop.dmg -nobrowse -quiet
-          MOUNT_POINT=$(ls -d /Volumes/Chrome\ Remote\ Desktop* 2>/dev/null | head -n1)
-          
-          if [ -z "$MOUNT_POINT" ]; then
-            echo "❌ Gagal mendapatkan mount point."
-            exit 1
-          fi
-
-          echo "📀 Mounted at: $MOUNT_POINT"
-
-          # Cari dan install .pkg
-          PKG_FILE=$(find "$MOUNT_POINT" -name "*.pkg" -maxdepth 1 | head -n1)
-          
-          if [ -n "$PKG_FILE" ]; then
-            echo "📦 Found PKG installer: $PKG_FILE"
-            sudo installer -pkg "$PKG_FILE" -target / -allowUntrusted
-          else
-            echo "❌ Tidak ditemukan file .pkg di dalam DMG!"
-            ls -la "$MOUNT_POINT"
-            exit 1
-          fi
-
-          echo "💾 Unmounting..."
-          hdiutil detach "$MOUNT_POINT" -quiet
-          rm -f /tmp/chromeremotedesktop.dmg
-          echo "✅ Chrome Remote Desktop installed successfully!"
+          echo "📦 Installing Chrome Remote Desktop Host via Homebrew Cask..."
+          # Menggunakan Homebrew untuk instalasi yang stabil di lingkungan CI
+          brew install --cask chrome-remote-desktop-host
+          echo "✅ Chrome Remote Desktop Host installed successfully!"
 
       - name: 👤 Generate Credentials
         run: |
-          # Generate credentials tanpa membuat user baru
+          # Generate credentials tanpa membuat user baru (untuk menghindari hang)
           USERNAME="gh-actions-$(date +%s)"
+          # Pastikan password hanya terdiri dari huruf/angka sederhana
           PASSWORD=$(openssl rand -base64 12 | tr -d '/+' | cut -c1-10)
           
           echo "CRD_USER=$USERNAME" >> $GITHUB_ENV
@@ -76,8 +49,21 @@ jobs:
           
           echo "🔧 Setting up Chrome Remote Desktop..."
           
-          # Gunakan command line CRD yang benar
-          /Applications/Google\ Chrome\ Remote\ Desktop.app/Contents/MacOS/chrome-remote-desktop \
+          # FIX: Cari binary executable CRD Host secara dinamis. 
+          # Homebrew menginstal aplikasi ke /Applications
+          BIN_PATH=$(find /Applications -type f -name "Chrome Remote Desktop Host" -perm +111 -print -quit)
+
+          if [ -z "$BIN_PATH" ]; then
+            echo "❌ CRD Host executable binary not found!"
+            echo "Listing potential apps for debug:"
+            ls -R /Applications | grep -i 'chrome remote' || true
+            exit 1
+          fi
+
+          echo "✅ Found CRD Host Binary at: $BIN_PATH"
+          
+          # Jalankan setup CRD
+          sudo "$BIN_PATH" \
             --code="$CRD_AUTH_CODE" \
             --redirect-url="https://remotedesktop.google.com/_/oauthredirect" \
             --name="GitHub-macOS-${{ github.run_id }}" \
@@ -93,7 +79,7 @@ jobs:
           if kill -0 $CRD_PID 2>/dev/null; then
             echo "✅ CRD setup completed successfully! PID: $CRD_PID"
           else
-            echo "⚠️ CRD process may have exited, checking status..."
+            echo "⚠️ CRD process may have exited. Check CRD_AUTH_CODE and permissions."
             ps aux | grep chrome-remote-desktop || true
           fi
 
@@ -121,7 +107,7 @@ jobs:
           while [ $COUNTER -lt 240 ]; do  # 240 * 30s = 2 hours (sesuai timeout)
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🟢 macOS CRD session active... ($((COUNTER * 30 / 60)) minutes)"
             # Cek apakah CRD process masih berjalan
-            if ps aux | grep -v grep | grep -q chrome-remote-desktop; then
+            if ps aux | grep -v grep | grep -q "Chrome Remote Desktop Host"; then
               echo "   ✅ CRD process is running"
             else
               echo "   ⚠️ CRD process not found, session may have ended"

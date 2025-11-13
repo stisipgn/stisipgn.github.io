@@ -1,97 +1,114 @@
-name: VNC_FINAL_TIPSUNIX
+name: RDP_TIPSUNIX
 
 on:
   workflow_dispatch:
 
 jobs:
-  vnc:
+  secure-rdp:
     runs-on: windows-latest
     timeout-minutes: 3600
 
     steps:
-
-      - name: Install TightVNC Server
+      - name: Configure Core RDP Settings
         run: |
-          $url = "https://www.tightvnc.com/download/2.8.81/tightvnc-2.8.81-gpl-setup-64bit.msi"
-          $installer = "$env:TEMP\tightvnc.msi"
-          Invoke-WebRequest -Uri $url -OutFile $installer
+          # Enable Remote Desktop and disable Network Level Authentication (if needed)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                             -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "SecurityLayer" -Value 0 -Force
 
-          # Generate VNC password
-          $password = -join ((33..126 | % {[char]$_}) | Get-Random -Count 12)
-          echo "VNC_PASSWORD=$password" >> $env:GITHUB_ENV
-
-          # Install TightVNC Server
-          Start-Process msiexec.exe -ArgumentList "/i `"$installer`" ADDLOCAL=Server /quiet /norestart" -Wait
-
-          # Apply password (DES-encrypted)
-          $passBytes = [Text.Encoding]::ASCII.GetBytes($password)
-          $key = [byte[]](0x17,0x52,0x6B,0xC2,0x4A,0x4E,0x6B,0xC2)
-          $provider = New-Object System.Security.Cryptography.DESCryptoServiceProvider
-          $provider.Key = $key
-          $provider.Mode = "ECB"
-          $enc = $provider.CreateEncryptor().TransformFinalBlock($passBytes,0,$passBytes.Length)
-
-          New-Item -Path "HKLM:\Software\TightVNC\Server" -Force | Out-Null
-          Set-ItemProperty "HKLM:\Software\TightVNC\Server" -Name Password -Value $enc -Type Binary
-          Set-ItemProperty "HKLM:\Software\TightVNC\Server" -Name ControlPassword -Value $enc -Type Binary
-
-          # Start VNC service
-          Set-Service tvnserver -StartupType Automatic
-          Start-Service tvnserver
-
-
-      - name: Download Tailscale (Standalone Binary)
-        run: |
-          $url = "https://pkgs.tailscale.com/stable/tailscale-ipn-setup.exe"
-          Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\tailscale.exe"
+          # Remove any existing rule with the same name to avoid duplication
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
           
-          # Extract Windows standalone binary from installer
-          Start-Process -FilePath "$env:TEMP\tailscale.exe" `
-            -ArgumentList "/extract `"$env:TEMP\tailscale_extracted`" /quiet" -Wait
+          # For testing, allow any incoming connection on port 3389
+          netsh advfirewall firewall add rule name="RDP-Tailscale" `
+            dir=in action=allow protocol=TCP localport=3389
 
-          Copy-Item "$env:TEMP\tailscale_extracted\tailscale.exe" "C:\tailscale.exe"
-          Copy-Item "$env:TEMP\tailscale_extracted\tailscaled.exe" "C:\tailscaled.exe"
+          # (Optional) Restart the Remote Desktop service to ensure changes take effect
+          Restart-Service -Name TermService -Force
 
-
-      - name: Start Tailscale Userspace Daemon
+      - name: Create RDP User with Secure Password
         run: |
-          Start-Process -FilePath "C:\tailscaled.exe" -ArgumentList "--cleanup" -Wait -ErrorAction SilentlyContinue
+          Add-Type -AssemblyName System.Security
+          $charSet = @{
+              Upper   = [char[]](65..90)      # A-Z
+              Lower   = [char[]](97..122)     # a-z
+              Number  = [char[]](48..57)      # 0-9
+              Special = ([char[]](33..47) + [char[]](58..64) +
+                         [char[]](91..96) + [char[]](123..126)) # Special characters
+          }
+          $rawPassword = @()
+          $rawPassword += $charSet.Upper | Get-Random -Count 4
+          $rawPassword += $charSet.Lower | Get-Random -Count 4
+          $rawPassword += $charSet.Number | Get-Random -Count 4
+          $rawPassword += $charSet.Special | Get-Random -Count 4
+          $password = -join ($rawPassword | Sort-Object { Get-Random })
+          $securePass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires
+          Add-LocalGroupMember -Group "Administrators" -Member "RDP"
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"
+          
+          echo "RDP_CREDS=User: RDP | Password: $password" >> $env:GITHUB_ENV
+          
+          if (-not (Get-LocalUser -Name "RDP")) {
+              Write-Error "User creation failed"
+              exit 1
+          }
 
-          # Start userspace daemon in background
-          Start-Process -FilePath "C:\tailscaled.exe" -ArgumentList "--tun=userspace-networking" -WindowStyle Hidden
-
-          Start-Sleep -Seconds 3
-
-
-      - name: Run Tailscale UP (Userspace Mode)
+      - name: Install Tailscale
         run: |
-          C:\tailscale.exe up `
-            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
-            --hostname=vnc-final-$env:GITHUB_RUN_ID `
-            --accept-routes `
-            --accept-dns=false
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
 
-          # Confirm status
-          C:\tailscale.exe status
-
-          # Fetch IP
-          $tsip = C:\tailscale.exe ip -4 | Select-Object -First 1
-          echo "TAILSCALE_IP=$tsip" >> $env:GITHUB_ENV
-
-
-      - name: Output Connection Info
+      - name: Establish Tailscale Connection
         run: |
-          Write-Host "=============================="
-          Write-Host "     VNC via Tailscale FINAL"
-          Write-Host "=============================="
-          Write-Host "IP:      $env:TAILSCALE_IP"
-          Write-Host "Port:    5900"
-          Write-Host "Password: $env:VNC_PASSWORD"
-          Write-Host "=============================="
-
-      - name: Keep session alive
+          # Bring up Tailscale with the provided auth key and set a unique hostname
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          
+          # Wait for Tailscale to assign an IP
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+      
+      - name: Verify RDP Accessibility
         run: |
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          
+          # Test connectivity using Test-NetConnection against the Tailscale IP on port 3389
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $testResult.TcpTestSucceeded) {
+              Write-Error "TCP connection to RDP port 3389 failed"
+              exit 1
+          }
+          Write-Host "TCP connectivity successful!"
+
+      - name: Maintain Connection
+        run: |
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "http://www.youtube.com/@TipsUNIX"
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: RDP"
+          Write-Host "Password: $(echo $env:RDP_CREDS)"
+          Write-Host "==================`n"
+          
+          # Keep runner active indefinitely (or until manually cancelled)
           while ($true) {
-            Write-Host "$(Get-Date) Runner Active"
-            Start-Sleep -Seconds 300
+              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
+              Start-Sleep -Seconds 300
           }

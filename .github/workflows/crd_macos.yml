@@ -60,7 +60,10 @@ jobs:
           USERNAME="remoteuser"
           # Pastikan password hanya terdiri dari huruf/angka sederhana
           PASSWORD=$(LC_ALL=C tr -dc A-Za-z0-9 </dev/urandom | head -c 10) 
-          sudo sysadminctl -addUser "$USERNAME" -password "$PASSWORD" -fullName "$USERNAME" -home /Users/"$USERNAME" -shell /bin/bash
+          
+          # FIX: Menambahkan < /dev/null untuk memastikan perintah tidak interaktif
+          sudo sysadminctl -addUser "$USERNAME" -password "$PASSWORD" -fullName "$USERNAME" -home /Users/"$USERNAME" -shell /bin/bash < /dev/null
+          
           # Tambahkan ke grup admin
           sudo dscl . -append /Groups/admin GroupMembership "$USERNAME" || true
           

@@ -16,14 +16,14 @@ jobs:
           uname -a
           echo "================================="
 
-      - name: 📦 Install Chrome Remote Desktop (Fix Mount Path)
+      - name: 📦 Install Chrome Remote Desktop
         run: |
           set -e
           echo "📦 Downloading Chrome Remote Desktop DMG..."
           curl -L -o /tmp/chromeremotedesktop.dmg "https://dl.google.com/dl/chrome-remote-desktop/chromeremotedesktop.dmg"
 
           echo "💿 Mounting DMG..."
-          # Gunakan hdiutil JSON output agar aman untuk nama volume dengan spasi
+          # Menggunakan hdiutil JSON output untuk mendapatkan mount point secara aman
           MOUNT_POINT=$(hdiutil attach /tmp/chromeremotedesktop.dmg -nobrowse -plist | \
             plutil -extract system-entities xml1 -o - - | \
             grep -A1 '<key>mount-point</key>' | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
@@ -34,20 +34,15 @@ jobs:
           fi
 
           echo "📀 Mounted at: $MOUNT_POINT"
-          ls "$MOUNT_POINT" || echo "⚠️ Tidak bisa membaca isi mount, lanjut deteksi manual..."
 
-          # Deteksi .pkg atau .app
-          if ls "$MOUNT_POINT"/*.pkg 1>/dev/null 2>&1; then
-            PKG=$(ls "$MOUNT_POINT"/*.pkg | head -n 1)
-            echo "📦 Found PKG installer: $PKG"
-            sudo installer -pkg "$PKG" -target /
-          elif find "$MOUNT_POINT" -maxdepth 1 -name "*.app" | grep -q .; then
-            APP_PATH=$(find "$MOUNT_POINT" -maxdepth 1 -name "*.app" | head -n 1)
-            echo "📦 Found App bundle: $APP_PATH"
-            sudo cp -R "$APP_PATH" /Applications/
+          # Cari dan install .pkg
+          PKG_FILE=$(find "$MOUNT_POINT" -maxdepth 1 -name "*.pkg" | head -n 1)
+          
+          if [ -n "$PKG_FILE" ]; then
+            echo "📦 Found PKG installer: $PKG_FILE"
+            sudo installer -pkg "$PKG_FILE" -target /
           else
-            echo "❌ Tidak ditemukan file .pkg atau .app di dalam DMG!"
-            echo "Isi volume:"
+            echo "❌ Tidak ditemukan file .pkg di dalam DMG!"
             ls -R "$MOUNT_POINT"
             exit 1
           fi
@@ -59,15 +54,21 @@ jobs:
 
       - name: 👤 Create Remote User
         run: |
+          # Perlu diketahui: Membuat user di macOS runner kadang-kadang menyebabkan masalah akses
+          # Untuk CRD, ini mungkin tidak diperlukan jika Anda hanya ingin akses ke desktop runner,
+          # tapi kita pertahankan agar Anda bisa login dengan user terpisah.
           USERNAME="remoteuser"
-          PASSWORD=$(openssl rand -base64 10)
-          sudo sysadminctl -addUser "$USERNAME" -password "$PASSWORD"
-          sudo dscl . -append /Groups/admin GroupMembership "$USERNAME"
+          # Pastikan password hanya terdiri dari huruf/angka sederhana
+          PASSWORD=$(LC_ALL=C tr -dc A-Za-z0-9 </dev/urandom | head -c 10) 
+          sudo sysadminctl -addUser "$USERNAME" -password "$PASSWORD" -fullName "$USERNAME" -home /Users/"$USERNAME" -shell /bin/bash
+          # Tambahkan ke grup admin
+          sudo dscl . -append /Groups/admin GroupMembership "$USERNAME" || true
+          
           echo "CRD_USER=$USERNAME" >> $GITHUB_ENV
           echo "CRD_PASS=$PASSWORD" >> $GITHUB_ENV
           echo "✅ Created user $USERNAME / $PASSWORD"
 
-      - name: 🧠 Setup Chrome Remote Desktop
+      - name: 🧠 Setup Chrome Remote Desktop (Dinamis)
         env:
           CRD_AUTH_CODE: ${{ secrets.CRD_AUTH_CODE }}
         run: |
@@ -79,26 +80,29 @@ jobs:
 
           PIN=$(jot -r 1 100000 999999)
           echo "CRD_PIN=$PIN" >> $GITHUB_ENV
+          
+          # FIX: Temukan binary secara dinamis di dalam folder Applications
+          # Nama binary host yang sebenarnya adalah 'remoting' atau 'Chrome Remote Desktop Host'
+          BIN=$(find /Applications -type f -name "Chrome Remote Desktop Host" -perm +111 -print -quit)
 
-          HOST_PATH="/Applications/Chrome Remote Desktop Host.app/Contents/MacOS/Chrome Remote Desktop Host"
-          ALT_PATH="/Applications/Chrome Remote Desktop.app/Contents/MacOS/Chrome Remote Desktop Host"
-
-          if [ -f "$HOST_PATH" ]; then
-            BIN="$HOST_PATH"
-          elif [ -f "$ALT_PATH" ]; then
-            BIN="$ALT_PATH"
-          else
-            echo "❌ CRD Host binary not found!"
-            ls -R /Applications | grep 'Chrome'
+          if [ -z "$BIN" ]; then
+            echo "❌ CRD Host executable binary not found in /Applications!"
+            echo "Listing potential paths for debug:"
+            ls -R /Applications | grep -i 'chrome' || true
             exit 1
           fi
 
-          echo "🚀 Registering CRD host..."
+          echo "✅ Found CRD Host Binary at: $BIN"
+
+          # Jalankan setup CRD
           sudo "$BIN" \
             --code="$CRD_AUTH_CODE" \
             --redirect-url="https://remotedesktop.google.com/_/oauthredirect" \
             --name="GitHub-macOS-${{ github.run_id }}" \
             --pin="$PIN" &
+          
+          # Beri waktu sebentar untuk proses pendaftaran berjalan
+          sleep 5
           echo "✅ CRD link initiated! PIN: $PIN"
 
       - name: 📋 Connection Info

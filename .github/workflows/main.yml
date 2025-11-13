@@ -1,4 +1,4 @@
-name: VNC_TIPSUNIX_Fixed_v2
+name: VNC_TIPSUNIX_Fixed_v3
 
 on:
   workflow_dispatch:
@@ -35,7 +35,17 @@ jobs:
           Start-Sleep -Seconds 5 # Beri waktu installer selesai sepenuhnya
 
           # 4. Atur password secara paksa menggunakan tvnpassword.exe
-          $tvnPassExe = "$env:ProgramFiles\TightVNC\tvnpassword.exe"
+          # ==========================================================
+          # PERBAIKAN: Gunakan path (x86)
+          # ==========================================================
+          $tvnPassExe = "${env:ProgramFiles(x86)}\TightVNC\tvnpassword.exe"
+          
+          # Periksa apakah file benar-benar ada sebelum menjalankannya
+          if (-not (Test-Path $tvnPassExe)) {
+            Write-Error "tvnpassword.exe not found at $tvnPassExe. Installation may have failed."
+            exit 1
+          }
+
           & $tvnPassExe /setpassword $password
           & $tvnPassExe /setviewonlypassword $password
 
@@ -44,29 +54,22 @@ jobs:
       - name: Restart VNC Service
         run: |
           Write-Host "Restarting TightVNC service to apply password..."
-          # Hentikan layanan (paksa jika perlu)
           Stop-Service -Name "TightVNC Server" -ErrorAction SilentlyContinue -Force
           Start-Sleep -Seconds 3
-          # Mulai lagi layanan
           Start-Service -Name "TightVNC Server"
           Write-Host "VNC Service restarted successfully."
 
       - name: Configure VNC Firewall
         run: |
-          # Hapus aturan lama jika ada
           netsh advfirewall firewall delete rule name="VNC-Tailscale"
-          
-          # Izinkan koneksi masuk pada port VNC default (5900)
           netsh advfirewall firewall add rule name="VNC-Tailscale" `
             dir=in action=allow protocol=TCP localport=5900
-          
           Write-Host "Firewall port 5900 opened."
 
       - name: Install Tailscale
         run: |
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
           $installerPath = "$env:TEMP\tailscale.msi"
-          
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
@@ -92,8 +95,6 @@ jobs:
       - name: Verify VNC Accessibility
         run: |
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          
-          # Tes koneksi ke port VNC (5900)
           $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 5900
           if (-not $testResult.TcpTestSucceeded) {
             Write-Error "TCP connection to VNC port 5900 failed"

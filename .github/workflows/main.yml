@@ -1,0 +1,105 @@
+name: VNC_TIPSUNIX
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-vnc:
+    runs-on: windows-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Install and Configure TightVNC
+        run: |
+          # 1. Generate a random password for VNC
+          # Pool karakter (alphanumeric + beberapa simbol umum)
+          $charPool = ([char[]](48..57) + [char[]](65..90) + [char[]](97..122) + '!', '@', '#', '$', '%', '&', '*')
+          $password = -join ($charPool | Get-Random -Count 12)
+          echo "VNC_PASS=$password" >> $env:GITHUB_ENV
+
+          # 2. Download TightVNC Server (64-bit)
+          $vncUrl = "https://www.tightvnc.com/download/2.8.81/tightvnc-2.8.81-gpl-setup-64bit.msi"
+          $installerPath = "$env:TEMP\tightvnc.msi"
+          Invoke-WebRequest -Uri $vncUrl -OutFile $installerPath
+
+          # 3. Install TightVNC silently
+          # Kita mengatur kata sandi utama dan kata sandi view-only saat instalasi
+          Start-Process msiexec.exe -ArgumentList @(
+              "/i", "`"$installerPath`"",
+              "/quiet", "/norestart",
+              "ADDLOCAL=Server",                 # Hanya install Server
+              "SERVER_REGISTER_AS_SERVICE=1",    # Jalankan sebagai service
+              "SERVER_START_SERVICE=1",          # Langsung jalankan service
+              "SERVER_SET_PASSWORD=1",           # Tanda untuk mengatur password
+              "VALUE_OF_PASSWORD=$password",     # Gunakan password acak kita
+              "VALUE_OF_VIEWONLYPASSWORD=$password" # Set view-only juga (opsional)
+          ) -Wait
+
+          Remove-Item $installerPath -Force
+          Write-Host "TightVNC installed with a secure password."
+
+      - name: Configure VNC Firewall
+        run: |
+          # Hapus aturan lama jika ada
+          netsh advfirewall firewall delete rule name="VNC-Tailscale"
+          
+          # Izinkan koneksi masuk pada port VNC default (5900)
+          netsh advfirewall firewall add rule name="VNC-Tailscale" `
+            dir=in action=allow protocol=TCP localport=5900
+          
+          Write-Host "Firewall port 5900 opened."
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Establish Tailscale Connection
+        run: |
+          # Gunakan --authkey dari secrets
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          
+          # Tunggu Tailscale mendapatkan IP
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+            Start-Sleep -Seconds 5
+            $retries++
+          }
+          
+          if (-not $tsIP) {
+            Write-Error "Tailscale IP not assigned. Exiting."
+            exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      - name: Verify VNC Accessibility
+        run: |
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          
+          # Tes koneksi ke port VNC (5900)
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 5900
+          if (-not $testResult.TcpTestSucceeded) {
+            Write-Error "TCP connection to VNC port 5900 failed"
+            exit 1
+          }
+          Write-Host "TCP connectivity successful!"
+
+      - name: Maintain Connection
+        run: |
+          Write-Host "`n=== VNC ACCESS ==="
+          Write-Host "http://www.youtube.com/@TipsUNIX"
+          Write-Host "Address: $env:TAILSCALE_IP:5900"
+          Write-Host "Password: $env:VNC_PASS"
+          Write-Host "==================`n"
+          
+          # Jaga runner tetap aktif
+          while ($true) {
+            Write-Host "[$(Get-Date)] VNC Active - Use Ctrl+C in workflow to terminate"
+            Start-Sleep -Seconds 300
+          }

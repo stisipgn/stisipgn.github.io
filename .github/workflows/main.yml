@@ -4,79 +4,87 @@ on:
   workflow_dispatch:
 
 jobs:
-  secure-vnc:
+  vnc:
     runs-on: windows-latest
     timeout-minutes: 3600
 
     steps:
-      - name: Install TightVNC
+      - name: Generate VNC Password
         run: |
-          $url = "https://www.tightvnc.com/download/2.8.81/tightvnc-2.8.81-gpl-setup-64bit.msi"
-          $file = "$env:TEMP\tightvnc.msi"
-          Invoke-WebRequest -Uri $url -OutFile $file
-
-          # Generate VNC password (8 chars)
           Add-Type -AssemblyName System.Security
           $chars = ([char[]](33..126))
-          $vncPass = -join (1..8 | ForEach-Object { $chars | Get-Random })
-          $encPass = ([System.Text.Encoding]::UTF8.GetBytes($vncPass))
-
+          $vncPass = -join (1..10 | ForEach-Object { $chars | Get-Random })
           echo "VNC_PASS=$vncPass" >> $env:GITHUB_ENV
 
-          # Install TightVNC silently with password
-          Start-Process msiexec.exe -ArgumentList "/i `"$file`" ADDLOCAL=Server /quiet /norestart" -Wait
+      - name: Install TigerVNC Server
+        run: |
+          $url = "https://sourceforge.net/projects/tigervnc/files/stable/1.13.1/tigervnc-1.13.1.exe/download"
+          $exe = "$env:TEMP\tiger.exe"
+          Invoke-WebRequest -Uri $url -OutFile $exe
 
-          # Apply authentication password
-          $regPath = "HKLM:\Software\TightVNC\Server"
-          New-Item -Path $regPath -Force | Out-Null
-          Set-ItemProperty -Path $regPath -Name "Password" -Value $encPass
+          # Silent install
+          Start-Process $exe -ArgumentList "/silent" -Wait
 
-          # Allow 5900 in firewall
-          netsh advfirewall firewall delete rule name="TightVNC"
-          netsh advfirewall firewall add rule name="TightVNC" dir=in action=allow protocol=TCP localport=5900
+          # Set password in registry
+          $reg = "HKLM:\Software\TigerVNC\WinVNC4"
+          New-Item -Path $reg -Force | Out-Null
+
+          $pass = $env:VNC_PASS
+          $enc = [System.Text.Encoding]::ASCII.GetBytes($pass)
+
+          Set-ItemProperty -Path $reg -Name "Password" -Value $enc
+          Set-ItemProperty -Path $reg -Name "ControlPassword" -Value $enc
+
+          # Enable service
+          sc.exe config winvnc4 start= auto
+          sc.exe start winvnc4
+          Start-Sleep -Seconds 3
+
+          # Firewall 5900
+          netsh advfirewall firewall delete rule name="TigerVNC" > $null 2>&1
+          netsh advfirewall firewall add rule name="TigerVNC" dir=in action=allow protocol=TCP localport=5900
 
       - name: Install Tailscale
         run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installer = "$env:TEMP\ts.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installer
-          Start-Process msiexec.exe -ArgumentList "/i `"$installer`" /quiet /norestart" -Wait
+          $ts = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $file = "$env:TEMP\ts.msi"
+          Invoke-WebRequest -Uri $ts -OutFile $file
+          Start-Process msiexec.exe -ArgumentList "/i `"$file`" /quiet /norestart" -Wait
 
-      - name: Connect to Tailscale
+      - name: Connect Tailscale
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
-             --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
-             --hostname=vnc-runner-$env:GITHUB_RUN_ID
+            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
+            --hostname=vnc-runner-$env:GITHUB_RUN_ID
 
-          # Wait for Tailscale IP
-          $ts=""
+          # Get IP
+          $tsIP = ""
           for ($i=0; $i -lt 10; $i++) {
-            $ts = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-            if ($ts) { break }
+            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+            if ($tsIP) { break }
             Start-Sleep -Seconds 5
           }
-          if (-not $ts) {
-            Write-Error "Tailscale IP not found!"
+          if (-not $tsIP) {
+            Write-Error "No Tailscale IPv4 assigned!"
             exit 1
           }
+          echo "TS_IP=$tsIP" >> $env:GITHUB_ENV
 
-          echo "TS_IP=$ts" >> $env:GITHUB_ENV
-
-      - name: Verify VNC Port
+      - name: Check Port 5900
         run: |
-          $result = Test-NetConnection -ComputerName $env:TS_IP -Port 5900
-          if (-not $result.TcpTestSucceeded) {
-            Write-Error "Port 5900 unreachable!"
+          $c = Test-NetConnection -ComputerName $env:TS_IP -Port 5900
+          if (-not $c.TcpTestSucceeded) {
+            Write-Error "TigerVNC port 5900 unreachable!"
             exit 1
           }
 
-      - name: Show Connection Info
+      - name: Output Credentials
         run: |
           Write-Host "`n=== VNC ACCESS ==="
-          Write-Host "IP Address: $env:TS_IP"
-          Write-Host "Port: 5900"
-          Write-Host "Password: $env:VNC_PASS"
-          Write-Host "Viewer: TightVNC / RealVNC / UltraVNC"
+          Write-Host "IP Address : $env:TS_IP"
+          Write-Host "Port       : 5900"
+          Write-Host "Password   : $env:VNC_PASS"
+          Write-Host "Viewer     : TigerVNC / RealVNC / TightVNC"
           Write-Host "===================`n"
 
       - name: Keep Alive

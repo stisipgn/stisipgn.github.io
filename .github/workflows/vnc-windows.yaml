@@ -1,0 +1,63 @@
+name: VNC_WINDOWS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  vnc:
+    runs-on: windows-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Generate Password
+        shell: bash
+        run: |
+          PASS=$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 12)
+          echo "PASS=$PASS" >> $GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
+          $msi = "$env:TEMP\tailscale.msi"
+          Invoke-WebRequest -Uri $url -OutFile $msi
+          Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /quiet" -Wait
+
+      - name: Connect Tailscale
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
+            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
+            --hostname=vnc-windows-${{ github.run_id }}
+
+          $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          echo "TSIP=$ip" >> $env:GITHUB_ENV
+
+      - name: Install UltraVNC
+        run: |
+          $pass = $env:PASS
+          $url = "https://uvnc.com/downloads/ultravnc/179-ultravnc-1506-x64.html?download=12:ultravnc-1506-x64"
+          $exe = "$env:TEMP\uvnc.exe"
+
+          Invoke-WebRequest -Uri $url -OutFile $exe
+          Start-Process $exe -ArgumentList "/verysilent" -Wait
+
+          $hex = [System.BitConverter]::ToString([System.Text.Encoding]::ASCII.GetBytes($pass)).Replace("-", "")
+
+          New-Item -Path "HKLM:\Software\UltraVNC" -Force | Out-Null
+          Set-ItemProperty -Path "HKLM:\Software\UltraVNC" -Name "passwd" -Value $hex
+          Set-ItemProperty -Path "HKLM:\Software\UltraVNC" -Name "passwd2" -Value $hex
+
+          Set-Service uvnc_service -StartupType Automatic
+          Start-Service uvnc_service
+
+      - name: Output Access
+        run: |
+          Write-Host "=== WINDOWS VNC ==="
+          Write-Host "IP: $env:TSIP:5900"
+          Write-Host "Password: $env:PASS"
+
+      - name: Keep Alive
+        run: |
+          while ($true) {
+            Write-Host "Windows VNC active at $env:TSIP"
+            Start-Sleep -Seconds 300
+          }

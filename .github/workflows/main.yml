@@ -1,4 +1,4 @@
-name: VNC_TIPSUNIX_UltraVNC
+name: VNC_TIPSUNIX_UltraVNC_Fixed
 
 on:
   workflow_dispatch:
@@ -18,19 +18,21 @@ jobs:
 
           # 2. Install UltraVNC using Chocolatey
           Write-Host "Installing UltraVNC using Chocolatey..."
-          choco install ultravnc -y --no-progress
+          # ==========================================================
+          # PERBAIKAN: Tambahkan parameter untuk menginstal service
+          # ==========================================================
+          choco install ultravnc -y --no-progress --package-parameters="'/SERVICE /SERVER'"
+          
           Write-Host "UltraVNC installed. Now setting password..."
 
           # 3. Atur password secara paksa menggunakan uvnc_settings.exe
-          # Path default UltraVNC
           $vncUtil = "${env:ProgramFiles}\uvnc bvba\UltraVNC\uvnc_settings.exe"
           
           if (-not (Test-Path $vncUtil)) {
             Write-Error "uvnc_settings.exe not found at $vncUtil. Installation may have failed."
             exit 1
           }
-
-          # Gunakan parameter UltraVNC untuk mengatur password
+          
           & $vncUtil -setpassword $password
           & $vncUtil -setviewonlypassword $password
 
@@ -39,7 +41,7 @@ jobs:
       - name: Restart VNC Service
         run: |
           Write-Host "Restarting UltraVNC service to apply password..."
-          # Nama layanan untuk UltraVNC adalah 'uvnc_service'
+          # Nama layanan ini ('uvnc_service') sekarang akan ditemukan
           Stop-Service -Name "uvnc_service" -ErrorAction SilentlyContinue -Force
           Start-Sleep -Seconds 3
           Start-Service -Name "uvnc_service"
@@ -47,7 +49,6 @@ jobs:
 
       - name: Configure VNC Firewall
         run: |
-          # Port VNC sama (5900)
           netsh advfirewall firewall delete rule name="VNC-Tailscale"
           netsh advfirewall firewall add rule name="VNC-Tailscale" `
             dir=in action=allow protocol=TCP localport=5900

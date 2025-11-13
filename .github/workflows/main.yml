@@ -94,7 +94,8 @@ jobs:
         run: |
           Write-Host "`n=== VNC ACCESS ==="
           Write-Host "http://www.youtube.com/@TipsUNIX"
-          Write-Host "Address: $env:TAILSCALE_IP:5900"
+          # PERBAIKAN: Gunakan ${...} untuk memastikan PowerShell membaca variabel dengan benar
+          Write-Host "Address: ${env:TAILSCALE_IP}:5900"
           Write-Host "Password: $env:VNC_PASS"
           Write-Host "==================`n"
           

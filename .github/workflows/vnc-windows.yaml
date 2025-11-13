@@ -20,34 +20,41 @@ jobs:
           $url = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
           $msi = "$env:TEMP\tailscale.msi"
           Invoke-WebRequest -Uri $url -OutFile $msi
-          Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /quiet" -Wait
+          Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /quiet /norestart" -Wait
 
       - name: Connect Tailscale
         run: |
           & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
             --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
-            --hostname=vnc-windows-${{ github.run_id }}
+            --hostname=vnc-win-${{ github.run_id }}
 
           $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
           echo "TSIP=$ip" >> $env:GITHUB_ENV
 
-      - name: Install UltraVNC
+      - name: Install TightVNC
         run: |
           $pass = $env:PASS
-          $url = "https://uvnc.com/downloads/ultravnc/179-ultravnc-1506-x64.html?download=12:ultravnc-1506-x64"
-          $exe = "$env:TEMP\uvnc.exe"
 
-          Invoke-WebRequest -Uri $url -OutFile $exe
-          Start-Process $exe -ArgumentList "/verysilent" -Wait
+          # Direct stable link from SourceForge
+          $url = "https://downloads.sourceforge.net/project/tightvnc/2.8.81/tightvnc-2.8.81-gpl-setup-64bit.msi"
+          $msi = "$env:TEMP\tvnc.msi"
 
-          $hex = [System.BitConverter]::ToString([System.Text.Encoding]::ASCII.GetBytes($pass)).Replace("-", "")
+          Invoke-WebRequest -Uri $url -OutFile $msi
+          Start-Process msiexec.exe -ArgumentList "/i `"$msi`" /quiet /norestart" -Wait
 
-          New-Item -Path "HKLM:\Software\UltraVNC" -Force | Out-Null
-          Set-ItemProperty -Path "HKLM:\Software\UltraVNC" -Name "passwd" -Value $hex
-          Set-ItemProperty -Path "HKLM:\Software\UltraVNC" -Name "passwd2" -Value $hex
+          # TightVNC requires simple XOR encoding
+          $xorKey = 0xAA
+          $bytes = [System.Text.Encoding]::ASCII.GetBytes($pass)
+          $encoded = ($bytes | ForEach-Object { $_ -bxor $xorKey })
+          $hex = ($encoded | ForEach-Object { "{0:X2}" -f $_ }) -join ""
 
-          Set-Service uvnc_service -StartupType Automatic
-          Start-Service uvnc_service
+          New-Item -Path "HKLM:\SOFTWARE\TightVNC\Server" -Force | Out-Null
+          Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "Password" -Value $hex
+          Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "AcceptRfbConnections" -Value 1
+          Set-ItemProperty -Path "HKLM:\SOFTWARE\TightVNC\Server" -Name "AlwaysShared" -Value 1
+
+          Start-Service tvnserver
+          Set-Service tvnserver -StartupType Automatic
 
       - name: Output Access
         run: |

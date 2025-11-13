@@ -1,4 +1,4 @@
-name: VNC_TIPSUNIX_Fixed_v3
+name: VNC_TIPSUNIX_DEBUG
 
 on:
   workflow_dispatch:
@@ -9,19 +9,14 @@ jobs:
     timeout-minutes: 3600
 
     steps:
+      # Langkah ini dimodifikasi untuk mencari file
       - name: Install and Configure TightVNC
         run: |
-          # 1. Generate a random password for VNC
-          $charPool = ([char[]](48..57) + [char[]](65..90) + [char[]](97..122) + '!', '@', '#', '$', '%', '&', '*')
-          $password = -join ($charPool | Get-Random -Count 12)
-          echo "VNC_PASS=$password" >> $env:GITHUB_ENV
-
-          # 2. Download TightVNC Server (64-bit)
+          # 1. Install TightVNC
           $vncUrl = "https://www.tightvnc.com/download/2.8.81/tightvnc-2.8.81-gpl-setup-64bit.msi"
           $installerPath = "$env:TEMP\tightvnc.msi"
           Invoke-WebRequest -Uri $vncUrl -OutFile $installerPath
 
-          # 3. Install TightVNC silently (TANPA mengatur password)
           Start-Process msiexec.exe -ArgumentList @(
               "/i", "`"$installerPath`"",
               "/quiet", "/norestart",
@@ -31,26 +26,35 @@ jobs:
           ) -Wait
 
           Remove-Item $installerPath -Force
-          Write-Host "TightVNC installed. Now setting password..."
-          Start-Sleep -Seconds 5 # Beri waktu installer selesai sepenuhnya
+          Write-Host "Install complete. Now searching for files..."
+          Start-Sleep -Seconds 5
 
-          # 4. Atur password secara paksa menggunakan tvnpassword.exe
-          # ==========================================================
-          # PERBAIKAN: Gunakan path (x86)
-          # ==========================================================
-          $tvnPassExe = "${env:ProgramFiles(x86)}\TightVNC\tvnpassword.exe"
-          
-          # Periksa apakah file benar-benar ada sebelum menjalankannya
-          if (-not (Test-Path $tvnPassExe)) {
-            Write-Error "tvnpassword.exe not found at $tvnPassExe. Installation may have failed."
-            exit 1
+          # 2. DEBUG: List Program Files directories
+          Write-Host "--- Listing C:\Program Files ---"
+          ls "C:\Program Files"
+          Write-Host "--------------------------------"
+              
+          Write-Host "--- Listing C:\Program Files (x86) ---"
+          ls "C:\Program Files (x86)"
+          Write-Host "------------------------------------"
+
+          # 3. DEBUG: Search for the file
+          Write-Host "--- Searching for tvnpassword.exe on C: drive (this may take a minute) ---"
+          $filePath = Get-ChildItem -Path "C:\" -Filter "tvnpassword.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+
+          if ($filePath) {
+              Write-Host "SUCCESS! File found at: $filePath"
+          } else {
+              Write-Error "File tvnpassword.exe NOT FOUND anywhere on C: drive."
           }
-
-          & $tvnPassExe /setpassword $password
-          & $tvnPassExe /setviewonlypassword $password
-
-          Write-Host "VNC password has been set via utility."
-
+          Write-Host "-----------------------------------------------------------------------"
+              
+          Write-Host "Please copy the output of this step and paste it in the chat."
+          Write-Host "The workflow will now intentionally fail so we can read the log."
+          exit 1
+      
+      # Langkah-langkah di bawah ini tidak akan berjalan,
+      # karena langkah di atas akan sengaja gagal.
       - name: Restart VNC Service
         run: |
           Write-Host "Restarting TightVNC service to apply password..."

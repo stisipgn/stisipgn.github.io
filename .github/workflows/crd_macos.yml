@@ -52,24 +52,17 @@ jobs:
           rm /tmp/chromeremotedesktop.dmg
           echo "✅ Chrome Remote Desktop installed successfully!"
 
-      - name: 👤 Create Remote User
+      - name: 👤 Generate Credentials (Skip User Creation to prevent hang)
         run: |
-          # Perlu diketahui: Membuat user di macOS runner kadang-kadang menyebabkan masalah akses
-          # Untuk CRD, ini mungkin tidak diperlukan jika Anda hanya ingin akses ke desktop runner,
-          # tapi kita pertahankan agar Anda bisa login dengan user terpisah.
+          # Perhatian: Pembuatan user baru di runner sering menyebabkan hang.
+          # Kita hanya akan membuat kredensial, dan CRD akan berjalan di bawah user runner default.
           USERNAME="remoteuser"
           # Pastikan password hanya terdiri dari huruf/angka sederhana
           PASSWORD=$(LC_ALL=C tr -dc A-Za-z0-9 </dev/urandom | head -c 10) 
           
-          # FIX: Menambahkan < /dev/null untuk memastikan perintah tidak interaktif
-          sudo sysadminctl -addUser "$USERNAME" -password "$PASSWORD" -fullName "$USERNAME" -home /Users/"$USERNAME" -shell /bin/bash < /dev/null
-          
-          # Tambahkan ke grup admin
-          sudo dscl . -append /Groups/admin GroupMembership "$USERNAME" || true
-          
           echo "CRD_USER=$USERNAME" >> $GITHUB_ENV
           echo "CRD_PASS=$PASSWORD" >> $GITHUB_ENV
-          echo "✅ Created user $USERNAME / $PASSWORD"
+          echo "✅ Generated credentials $USERNAME / $PASSWORD (User creation skipped)"
 
       - name: 🧠 Setup Chrome Remote Desktop (Dinamis)
         env:

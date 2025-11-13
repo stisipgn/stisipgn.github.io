@@ -1,4 +1,4 @@
-name: VNC_TIPSUNIX_UltraVNC_Fixed
+name: VNC_TIPSUNIX
 
 on:
   workflow_dispatch:
@@ -9,96 +9,79 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      - name: Install and Configure UltraVNC
+      - name: Install TightVNC
         run: |
-          # 1. Generate a random password for VNC
-          $charPool = ([char[]](48..57) + [char[]](65..90) + [char[]](97..122) + '!', '@', '#', '$', '%', '&', '*')
-          $password = -join ($charPool | Get-Random -Count 12)
-          echo "VNC_PASS=$password" >> $env:GITHUB_ENV
+          $url = "https://www.tightvnc.com/download/2.8.81/tightvnc-2.8.81-gpl-setup-64bit.msi"
+          $file = "$env:TEMP\tightvnc.msi"
+          Invoke-WebRequest -Uri $url -OutFile $file
 
-          # 2. Install UltraVNC using Chocolatey
-          Write-Host "Installing UltraVNC using Chocolatey..."
-          # ==========================================================
-          # PERBAIKAN: Tambahkan parameter untuk menginstal service
-          # ==========================================================
-          choco install ultravnc -y --no-progress --package-parameters="'/SERVICE /SERVER'"
-          
-          Write-Host "UltraVNC installed. Now setting password..."
+          # Generate VNC password (8 chars)
+          Add-Type -AssemblyName System.Security
+          $chars = ([char[]](33..126))
+          $vncPass = -join (1..8 | ForEach-Object { $chars | Get-Random })
+          $encPass = ([System.Text.Encoding]::UTF8.GetBytes($vncPass))
 
-          # 3. Atur password secara paksa menggunakan uvnc_settings.exe
-          $vncUtil = "${env:ProgramFiles}\uvnc bvba\UltraVNC\uvnc_settings.exe"
-          
-          if (-not (Test-Path $vncUtil)) {
-            Write-Error "uvnc_settings.exe not found at $vncUtil. Installation may have failed."
-            exit 1
-          }
-          
-          & $vncUtil -setpassword $password
-          & $vncUtil -setviewonlypassword $password
+          echo "VNC_PASS=$vncPass" >> $env:GITHUB_ENV
 
-          Write-Host "VNC password has been set via utility."
+          # Install TightVNC silently with password
+          Start-Process msiexec.exe -ArgumentList "/i `"$file`" ADDLOCAL=Server /quiet /norestart" -Wait
 
-      - name: Restart VNC Service
-        run: |
-          Write-Host "Restarting UltraVNC service to apply password..."
-          # Nama layanan ini ('uvnc_service') sekarang akan ditemukan
-          Stop-Service -Name "uvnc_service" -ErrorAction SilentlyContinue -Force
-          Start-Sleep -Seconds 3
-          Start-Service -Name "uvnc_service"
-          Write-Host "VNC Service restarted successfully."
+          # Apply authentication password
+          $regPath = "HKLM:\Software\TightVNC\Server"
+          New-Item -Path $regPath -Force | Out-Null
+          Set-ItemProperty -Path $regPath -Name "Password" -Value $encPass
 
-      - name: Configure VNC Firewall
-        run: |
-          netsh advfirewall firewall delete rule name="VNC-Tailscale"
-          netsh advfirewall firewall add rule name="VNC-Tailscale" `
-            dir=in action=allow protocol=TCP localport=5900
-          Write-Host "Firewall port 5900 opened."
+          # Allow 5900 in firewall
+          netsh advfirewall firewall delete rule name="TightVNC"
+          netsh advfirewall firewall add rule name="TightVNC" dir=in action=allow protocol=TCP localport=5900
 
       - name: Install Tailscale
         run: |
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
-          Remove-Item $installerPath -Force
+          $installer = "$env:TEMP\ts.msi"
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installer
+          Start-Process msiexec.exe -ArgumentList "/i `"$installer`" /quiet /norestart" -Wait
 
-      - name: Establish Tailscale Connection
+      - name: Connect to Tailscale
         run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
-          
-          $tsIP = $null
-          $retries = 0
-          while (-not $tsIP -and $retries -lt 10) {
-            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
+             --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
+             --hostname=vnc-runner-$env:GITHUB_RUN_ID
+
+          # Wait for Tailscale IP
+          $ts=""
+          for ($i=0; $i -lt 10; $i++) {
+            $ts = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+            if ($ts) { break }
             Start-Sleep -Seconds 5
-            $retries++
           }
-          
-          if (-not $tsIP) {
-            Write-Error "Tailscale IP not assigned. Exiting."
+          if (-not $ts) {
+            Write-Error "Tailscale IP not found!"
             exit 1
           }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Verify VNC Accessibility
+          echo "TS_IP=$ts" >> $env:GITHUB_ENV
+
+      - name: Verify VNC Port
         run: |
-          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
-          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 5900
-          if (-not $testResult.TcpTestSucceeded) {
-            Write-Error "TCP connection to VNC port 5900 failed"
+          $result = Test-NetConnection -ComputerName $env:TS_IP -Port 5900
+          if (-not $result.TcpTestSucceeded) {
+            Write-Error "Port 5900 unreachable!"
             exit 1
           }
-          Write-Host "TCP connectivity successful!"
 
-      - name: Maintain Connection
+      - name: Show Connection Info
         run: |
           Write-Host "`n=== VNC ACCESS ==="
-          Write-Host "http://www.youtube.com/@TipsUNIX"
-          Write-Host "Address: ${env:TAILSCALE_IP}:5900"
+          Write-Host "IP Address: $env:TS_IP"
+          Write-Host "Port: 5900"
           Write-Host "Password: $env:VNC_PASS"
-          Write-Host "==================`n"
-          
+          Write-Host "Viewer: TightVNC / RealVNC / UltraVNC"
+          Write-Host "===================`n"
+
+      - name: Keep Alive
+        run: |
           while ($true) {
-            Write-Host "[$(Get-Date)] VNC Active - Use Ctrl+C in workflow to terminate"
+            Write-Host "[$(Get-Date)] VNC Alive"
             Start-Sleep -Seconds 300
           }

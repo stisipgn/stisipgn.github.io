@@ -1,4 +1,4 @@
-name: VNC_TIPSUNIX_Final
+name: VNC_TIPSUNIX_DEBUG_v2
 
 on:
   workflow_dispatch:
@@ -9,33 +9,39 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      - name: Install and Configure TightVNC
+      - name: Install and DEBUG VNC Path
         run: |
-          # 1. Generate a random password for VNC
-          $charPool = ([char[]](48..57) + [char[]](65..90) + [char[]](97..122) + '!', '@', '#', '$', '%', '&', '*')
-          $password = -join ($charPool | Get-Random -Count 12)
-          echo "VNC_PASS=$password" >> $env:GITHUB_ENV
-
-          # 2. Install TightVNC using Chocolatey (lebih andal)
+          # 1. Install TightVNC using Chocolatey
           Write-Host "Installing TightVNC using Chocolatey..."
           choco install tightvnc -y --no-progress
-          Write-Host "TightVNC installed. Now setting password..."
+          Write-Host "Install complete. Now searching for files..."
+          Start-Sleep -Seconds 5
 
-          # 3. Atur password secara paksa menggunakan tvnpassword.exe
-          # Kita gunakan path yang benar (${env:ProgramFiles} = C:\Program Files)
-          $tvnPassExe = "${env:ProgramFiles}\TightVNC\tvnpassword.exe"
-          
-          # Periksa apakah file benar-benar ada sebelum menjalankannya
-          if (-not (Test-Path $tvnPassExe)) {
-            Write-Error "tvnpassword.exe not found at $tvnPassExe. Installation may have failed."
-            exit 1
+          # 2. DEBUG: List Program Files directories
+          Write-Host "--- Listing C:\Program Files ---"
+          ls "C:\Program Files"
+          Write-Host "--------------------------------"
+              
+          Write-Host "--- Listing C:\Program Files (x86) ---"
+          ls "C:\Program Files (x86)"
+          Write-Host "------------------------------------"
+
+          # 3. DEBUG: Search for the file
+          Write-Host "--- Searching for tvnpassword.exe on C: drive (this may take a minute) ---"
+          $filePath = Get-ChildItem -Path "C:\" -Filter "tvnpassword.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+
+          if ($filePath) {
+              Write-Host "SUCCESS! File found at: $filePath"
+          } else {
+              Write-Error "File tvnpassword.exe NOT FOUND anywhere on C: drive."
           }
-
-          & $tvnPassExe /setpassword $password
-          & $tvnPassExe /setviewonlypassword $password
-
-          Write-Host "VNC password has been set via utility."
-
+          Write-Host "-----------------------------------------------------------------------"
+              
+          Write-Host "Please copy the output of this step and paste it in the chat."
+          Write-Host "The workflow will now intentionally fail so we can read the log."
+          exit 1
+      
+      # Langkah-langkah di bawah ini tidak akan berjalan
       - name: Restart VNC Service
         run: |
           Write-Host "Restarting TightVNC service to apply password..."
@@ -75,7 +81,7 @@ jobs:
             Write-Error "Tailscale IP not assigned. Exiting."
             exit 1
           }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+          echo "TAILSCALE_IP=$env:GITHUB_ENV"
 
       - name: Verify VNC Accessibility
         run: |

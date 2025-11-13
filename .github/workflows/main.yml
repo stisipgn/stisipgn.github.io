@@ -1,4 +1,4 @@
-name: VNC_TIPSUNIX_DEBUG_v2
+name: VNC_TIPSUNIX_DEBUG_v3
 
 on:
   workflow_dispatch:
@@ -9,33 +9,42 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      - name: Install and DEBUG VNC Path
+      - name: Install and FIND VNC File
         run: |
           # 1. Install TightVNC using Chocolatey
           Write-Host "Installing TightVNC using Chocolatey..."
           choco install tightvnc -y --no-progress
-          Write-Host "Install complete. Now searching for files..."
+          Write-Host "Install complete. Now searching for file..."
           Start-Sleep -Seconds 5
 
-          # 2. DEBUG: List Program Files directories
-          Write-Host "--- Listing C:\Program Files ---"
-          ls "C:\Program Files"
-          Write-Host "--------------------------------"
-              
-          Write-Host "--- Listing C:\Program Files (x86) ---"
-          ls "C:\Program Files (x86)"
-          Write-Host "------------------------------------"
+          # 2. Tentukan path instalasi yang kita temukan
+          $installDir = "${env:ProgramFiles}\TightVNC"
+          Write-Host "Target directory is: $installDir"
 
-          # 3. DEBUG: Search for the file
-          Write-Host "--- Searching for tvnpassword.exe on C: drive (this may take a minute) ---"
-          $filePath = Get-ChildItem -Path "C:\" -Filter "tvnpassword.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+          # 3. Periksa apakah folder itu ada
+          if (-not (Test-Path $installDir)) {
+            Write-Error "Target directory $installDir NOT FOUND."
+            Write-Host "Listing C:\Program Files (x86) as a fallback..."
+            ls "C:\Program Files (x86)"
+            exit 1
+          }
+
+          # 4. DEBUG: Tampilkan isi dari folder instalasi
+          Write-Host "--- Listing contents of $installDir ---"
+          ls $installDir
+          Write-Host "-------------------------------------------"
+
+          # 5. DEBUG: Cari 'tvnpassword.exe' di dalam folder instalasi
+          Write-Host "--- Searching for tvnpassword.exe inside $installDir (recursive) ---"
+          $filePath = Get-ChildItem -Path $installDir -Filter "tvnpassword.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
 
           if ($filePath) {
-              Write-Host "SUCCESS! File found at: $filePath"
+              Write-Host "--- SUCCESS! FILE FOUND AT: ---"
+              Write-Host $filePath
+              Write-Host "---------------------------------"
           } else {
-              Write-Error "File tvnpassword.exe NOT FOUND anywhere on C: drive."
+              Write-Error "File tvnpassword.exe NOT FOUND inside $installDir."
           }
-          Write-Host "-----------------------------------------------------------------------"
               
           Write-Host "Please copy the output of this step and paste it in the chat."
           Write-Host "The workflow will now intentionally fail so we can read the log."
@@ -81,7 +90,7 @@ jobs:
             Write-Error "Tailscale IP not assigned. Exiting."
             exit 1
           }
-          echo "TAILSCALE_IP=$env:GITHUB_ENV"
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
       - name: Verify VNC Accessibility
         run: |

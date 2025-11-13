@@ -23,10 +23,9 @@ jobs:
           curl -L -o /tmp/chromeremotedesktop.dmg "https://dl.google.com/dl/chrome-remote-desktop/chromeremotedesktop.dmg"
 
           echo "💿 Mounting DMG..."
-          # Menggunakan hdiutil JSON output untuk mendapatkan mount point secara aman
-          MOUNT_POINT=$(hdiutil attach /tmp/chromeremotedesktop.dmg -nobrowse -plist | \
-            plutil -extract system-entities xml1 -o - - | \
-            grep -A1 '<key>mount-point</key>' | grep '<string>' | sed 's/.*<string>\(.*\)<\/string>.*/\1/' | head -n 1)
+          # Mount dan cari mount point dengan cara yang lebih reliable
+          hdiutil attach /tmp/chromeremotedesktop.dmg -nobrowse -quiet
+          MOUNT_POINT=$(ls -d /Volumes/Chrome\ Remote\ Desktop* 2>/dev/null | head -n1)
           
           if [ -z "$MOUNT_POINT" ]; then
             echo "❌ Gagal mendapatkan mount point."
@@ -36,35 +35,33 @@ jobs:
           echo "📀 Mounted at: $MOUNT_POINT"
 
           # Cari dan install .pkg
-          PKG_FILE=$(find "$MOUNT_POINT" -maxdepth 1 -name "*.pkg" | head -n 1)
+          PKG_FILE=$(find "$MOUNT_POINT" -name "*.pkg" -maxdepth 1 | head -n1)
           
           if [ -n "$PKG_FILE" ]; then
             echo "📦 Found PKG installer: $PKG_FILE"
-            sudo installer -pkg "$PKG_FILE" -target /
+            sudo installer -pkg "$PKG_FILE" -target / -allowUntrusted
           else
             echo "❌ Tidak ditemukan file .pkg di dalam DMG!"
-            ls -R "$MOUNT_POINT"
+            ls -la "$MOUNT_POINT"
             exit 1
           fi
 
           echo "💾 Unmounting..."
-          hdiutil detach "$MOUNT_POINT"
-          rm /tmp/chromeremotedesktop.dmg
+          hdiutil detach "$MOUNT_POINT" -quiet
+          rm -f /tmp/chromeremotedesktop.dmg
           echo "✅ Chrome Remote Desktop installed successfully!"
 
-      - name: 👤 Generate Credentials (Skip User Creation to prevent hang)
+      - name: 👤 Generate Credentials
         run: |
-          # Perhatian: Pembuatan user baru di runner sering menyebabkan hang.
-          # Kita hanya akan membuat kredensial, dan CRD akan berjalan di bawah user runner default.
-          USERNAME="remoteuser"
-          # Pastikan password hanya terdiri dari huruf/angka sederhana
-          PASSWORD=$(LC_ALL=C tr -dc A-Za-z0-9 </dev/urandom | head -c 10) 
+          # Generate credentials tanpa membuat user baru
+          USERNAME="gh-actions-$(date +%s)"
+          PASSWORD=$(openssl rand -base64 12 | tr -d '/+' | cut -c1-10)
           
           echo "CRD_USER=$USERNAME" >> $GITHUB_ENV
           echo "CRD_PASS=$PASSWORD" >> $GITHUB_ENV
-          echo "✅ Generated credentials $USERNAME / $PASSWORD (User creation skipped)"
+          echo "✅ Generated credentials: Username=$USERNAME, Password=$PASSWORD"
 
-      - name: 🧠 Setup Chrome Remote Desktop (Dinamis)
+      - name: 🧠 Setup Chrome Remote Desktop
         env:
           CRD_AUTH_CODE: ${{ secrets.CRD_AUTH_CODE }}
         run: |
@@ -77,43 +74,59 @@ jobs:
           PIN=$(jot -r 1 100000 999999)
           echo "CRD_PIN=$PIN" >> $GITHUB_ENV
           
-          # FIX: Temukan binary secara dinamis di dalam folder Applications
-          # Nama binary host yang sebenarnya adalah 'remoting' atau 'Chrome Remote Desktop Host'
-          BIN=$(find /Applications -type f -name "Chrome Remote Desktop Host" -perm +111 -print -quit)
-
-          if [ -z "$BIN" ]; then
-            echo "❌ CRD Host executable binary not found in /Applications!"
-            echo "Listing potential paths for debug:"
-            ls -R /Applications | grep -i 'chrome' || true
-            exit 1
-          fi
-
-          echo "✅ Found CRD Host Binary at: $BIN"
-
-          # Jalankan setup CRD
-          sudo "$BIN" \
+          echo "🔧 Setting up Chrome Remote Desktop..."
+          
+          # Gunakan command line CRD yang benar
+          /Applications/Google\ Chrome\ Remote\ Desktop.app/Contents/MacOS/chrome-remote-desktop \
             --code="$CRD_AUTH_CODE" \
             --redirect-url="https://remotedesktop.google.com/_/oauthredirect" \
             --name="GitHub-macOS-${{ github.run_id }}" \
             --pin="$PIN" &
+
+          CRD_PID=$!
+          echo "CRD_PID=$CRD_PID" >> $GITHUB_ENV
           
-          # Beri waktu sebentar untuk proses pendaftaran berjalan
-          sleep 5
-          echo "✅ CRD link initiated! PIN: $PIN"
+          # Tunggu proses mulai
+          sleep 15
+          
+          # Cek apakah proses masih berjalan
+          if kill -0 $CRD_PID 2>/dev/null; then
+            echo "✅ CRD setup completed successfully! PID: $CRD_PID"
+          else
+            echo "⚠️ CRD process may have exited, checking status..."
+            ps aux | grep chrome-remote-desktop || true
+          fi
 
       - name: 📋 Connection Info
         run: |
           echo "=============================================="
           echo "🍏 Chrome Remote Desktop for macOS Ready!"
           echo "User     : $CRD_USER"
-          echo "Password : $CRD_PASS"
+          echo "Password : $CRD_PASS" 
           echo "PIN      : $CRD_PIN"
           echo "Access   : https://remotedesktop.google.com/access"
+          echo "Run ID   : ${{ github.run_id }}"
           echo "=============================================="
+
+      - name: 🔍 Check CRD Status
+        run: |
+          echo "🔍 Checking Chrome Remote Desktop status..."
+          ps aux | grep -i chrome-remote-desktop || echo "No CRD processes found"
+          system_profiler SPApplicationsDataType | grep -i "chrome remote" || true
 
       - name: 💤 Keep Alive
         run: |
-          while true; do
-            echo "[$(date)] 🟢 macOS CRD session active..."
-            sleep 300
+          echo "🔄 Starting keep-alive loop..."
+          COUNTER=0
+          while [ $COUNTER -lt 240 ]; do  # 240 * 30s = 2 hours (sesuai timeout)
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] 🟢 macOS CRD session active... ($((COUNTER * 30 / 60)) minutes)"
+            # Cek apakah CRD process masih berjalan
+            if ps aux | grep -v grep | grep -q chrome-remote-desktop; then
+              echo "   ✅ CRD process is running"
+            else
+              echo "   ⚠️ CRD process not found, session may have ended"
+            fi
+            sleep 30
+            COUNTER=$((COUNTER + 1))
           done
+          echo "⏰ Timeout reached, ending workflow"

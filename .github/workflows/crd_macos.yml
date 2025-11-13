@@ -16,12 +16,41 @@ jobs:
           uname -a
           echo "================================="
 
-      - name: 📦 Install Chrome Remote Desktop Host (via Homebrew Cask)
+      - name: 📦 Install Chrome Remote Desktop (Via DMG Installer)
         run: |
-          echo "📦 Installing Chrome Remote Desktop Host via Homebrew Cask..."
-          # Menggunakan Homebrew untuk instalasi yang stabil di lingkungan CI
-          brew install --cask chrome-remote-desktop-host
-          echo "✅ Chrome Remote Desktop Host installed successfully!"
+          set -e
+          echo "📦 Downloading Chrome Remote Desktop DMG..."
+          # Menggunakan URL unduhan langsung resmi
+          curl -L -o /tmp/chromeremotedesktop.dmg "https://dl.google.com/dl/chrome-remote-desktop/chromeremotedesktop.dmg"
+
+          echo "💿 Mounting DMG..."
+          hdiutil attach /tmp/chromeremotedesktop.dmg -nobrowse -quiet
+          MOUNT_POINT=$(ls -d /Volumes/Chrome\ Remote\ Desktop* 2>/dev/null | head -n1)
+          
+          if [ -z "$MOUNT_POINT" ]; then
+            echo "❌ Gagal mendapatkan mount point."
+            exit 1
+          fi
+
+          echo "📀 Mounted at: $MOUNT_POINT"
+
+          # Cari dan install .pkg
+          PKG_FILE=$(find "$MOUNT_POINT" -name "*.pkg" -maxdepth 1 | head -n1)
+          
+          if [ -n "$PKG_FILE" ]; then
+            echo "📦 Found PKG installer: $PKG_FILE"
+            # Instal ke root path /Applications
+            sudo installer -pkg "$PKG_FILE" -target / -allowUntrusted
+          else
+            echo "❌ Tidak ditemukan file .pkg di dalam DMG!"
+            ls -la "$MOUNT_POINT"
+            exit 1
+          fi
+
+          echo "💾 Unmounting..."
+          hdiutil detach "$MOUNT_POINT" -quiet
+          rm -f /tmp/chromeremotedesktop.dmg
+          echo "✅ Chrome Remote Desktop installed successfully!"
 
       - name: 👤 Generate Credentials
         run: |
@@ -49,13 +78,14 @@ jobs:
           
           echo "🔧 Setting up Chrome Remote Desktop..."
           
-          # FIX: Cari binary executable CRD Host secara dinamis. 
-          # Homebrew menginstal aplikasi ke /Applications
-          BIN_PATH=$(find /Applications -type f -name "Chrome Remote Desktop Host" -perm +111 -print -quit)
+          # Pencarian binary yang paling agresif di dalam /Applications
+          # Mencari file executable biner host CRD, yang biasanya adalah 'remoting_host'
+          # atau 'Chrome Remote Desktop Host'
+          BIN_PATH=$(find /Applications -type f -perm +111 \( -name "*remoting_host*" -o -name "*Chrome Remote Desktop Host*" \) -print -quit)
 
           if [ -z "$BIN_PATH" ]; then
             echo "❌ CRD Host executable binary not found!"
-            echo "Listing potential apps for debug:"
+            echo "Listing files in /Applications/ for debug:"
             ls -R /Applications | grep -i 'chrome remote' || true
             exit 1
           fi
@@ -63,6 +93,7 @@ jobs:
           echo "✅ Found CRD Host Binary at: $BIN_PATH"
           
           # Jalankan setup CRD
+          # Menggunakan path lengkap yang ditemukan oleh find
           sudo "$BIN_PATH" \
             --code="$CRD_AUTH_CODE" \
             --redirect-url="https://remotedesktop.google.com/_/oauthredirect" \
@@ -80,7 +111,7 @@ jobs:
             echo "✅ CRD setup completed successfully! PID: $CRD_PID"
           else
             echo "⚠️ CRD process may have exited. Check CRD_AUTH_CODE and permissions."
-            ps aux | grep chrome-remote-desktop || true
+            ps aux | grep "Chrome Remote Desktop" || true
           fi
 
       - name: 📋 Connection Info
@@ -97,7 +128,7 @@ jobs:
       - name: 🔍 Check CRD Status
         run: |
           echo "🔍 Checking Chrome Remote Desktop status..."
-          ps aux | grep -i chrome-remote-desktop || echo "No CRD processes found"
+          ps aux | grep -i "Chrome Remote Desktop" || echo "No CRD processes found"
           system_profiler SPApplicationsDataType | grep -i "chrome remote" || true
 
       - name: 💤 Keep Alive

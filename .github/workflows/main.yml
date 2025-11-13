@@ -21,7 +21,7 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "Downloading TigerVNC..."
-          $url = "https://github.com/TigerVNC/tigervnc/releases/download/v1.13.1/tigervnc64-1.13.1.exe"
+          $url = "https://downloads.sourceforge.net/tigervnc/tigervnc64-1.13.1.exe"
           $exe = "$env:TEMP\tiger.exe"
           Invoke-WebRequest -Uri $url -OutFile $exe
 
@@ -39,7 +39,7 @@ jobs:
           Set-ItemProperty -Path $reg -Name "ControlPassword" -Value $enc
           Set-ItemProperty -Path $reg -Name "AlwaysShared" -Value 1
 
-          # Enable & start service
+          # Enable service
           sc.exe config winvnc4 start= auto
           sc.exe start winvnc4
           Start-Sleep -Seconds 3
@@ -63,31 +63,22 @@ jobs:
             --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
             --hostname=vnc-runner-$env:GITHUB_RUN_ID
 
-          # Get IP
           $tsIP = ""
           for ($i=0; $i -lt 10; $i++) {
             $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
             if ($tsIP) { break }
             Start-Sleep -Seconds 5
           }
-
-          if (-not $tsIP) {
-            Write-Error "No Tailscale IPv4 assigned!"
-            exit 1
-          }
-
+          if (-not $tsIP) { exit 1 }
           echo "TS_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Test VNC Port 5900
+      - name: Test Port 5900
         shell: pwsh
         run: |
           $c = Test-NetConnection -ComputerName $env:TS_IP -Port 5900
-          if (-not $c.TcpTestSucceeded) {
-            Write-Error "TigerVNC port 5900 unreachable!"
-            exit 1
-          }
+          if (-not $c.TcpTestSucceeded) { exit 1 }
 
-      - name: Output Connection Info
+      - name: Output Credentials
         shell: pwsh
         run: |
           Write-Host "`n=== VNC ACCESS ==="
@@ -97,7 +88,7 @@ jobs:
           Write-Host "Viewer     : TigerVNC / RealVNC / TightVNC"
           Write-Host "===================`n"
 
-      - name: Keep Runner Alive
+      - name: Keep Alive
         shell: pwsh
         run: |
           while ($true) {

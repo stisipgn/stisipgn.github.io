@@ -1,4 +1,4 @@
-name: VNC_TIPSUNIX_DEBUG_v3
+name: VNC_TIPSUNIX_UltraVNC
 
 on:
   workflow_dispatch:
@@ -9,58 +9,45 @@ jobs:
     timeout-minutes: 3600
 
     steps:
-      - name: Install and FIND VNC File
+      - name: Install and Configure UltraVNC
         run: |
-          # 1. Install TightVNC using Chocolatey
-          Write-Host "Installing TightVNC using Chocolatey..."
-          choco install tightvnc -y --no-progress
-          Write-Host "Install complete. Now searching for file..."
-          Start-Sleep -Seconds 5
+          # 1. Generate a random password for VNC
+          $charPool = ([char[]](48..57) + [char[]](65..90) + [char[]](97..122) + '!', '@', '#', '$', '%', '&', '*')
+          $password = -join ($charPool | Get-Random -Count 12)
+          echo "VNC_PASS=$password" >> $env:GITHUB_ENV
 
-          # 2. Tentukan path instalasi yang kita temukan
-          $installDir = "${env:ProgramFiles}\TightVNC"
-          Write-Host "Target directory is: $installDir"
+          # 2. Install UltraVNC using Chocolatey
+          Write-Host "Installing UltraVNC using Chocolatey..."
+          choco install ultravnc -y --no-progress
+          Write-Host "UltraVNC installed. Now setting password..."
 
-          # 3. Periksa apakah folder itu ada
-          if (-not (Test-Path $installDir)) {
-            Write-Error "Target directory $installDir NOT FOUND."
-            Write-Host "Listing C:\Program Files (x86) as a fallback..."
-            ls "C:\Program Files (x86)"
+          # 3. Atur password secara paksa menggunakan uvnc_settings.exe
+          # Path default UltraVNC
+          $vncUtil = "${env:ProgramFiles}\uvnc bvba\UltraVNC\uvnc_settings.exe"
+          
+          if (-not (Test-Path $vncUtil)) {
+            Write-Error "uvnc_settings.exe not found at $vncUtil. Installation may have failed."
             exit 1
           }
 
-          # 4. DEBUG: Tampilkan isi dari folder instalasi
-          Write-Host "--- Listing contents of $installDir ---"
-          ls $installDir
-          Write-Host "-------------------------------------------"
+          # Gunakan parameter UltraVNC untuk mengatur password
+          & $vncUtil -setpassword $password
+          & $vncUtil -setviewonlypassword $password
 
-          # 5. DEBUG: Cari 'tvnpassword.exe' di dalam folder instalasi
-          Write-Host "--- Searching for tvnpassword.exe inside $installDir (recursive) ---"
-          $filePath = Get-ChildItem -Path $installDir -Filter "tvnpassword.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+          Write-Host "VNC password has been set via utility."
 
-          if ($filePath) {
-              Write-Host "--- SUCCESS! FILE FOUND AT: ---"
-              Write-Host $filePath
-              Write-Host "---------------------------------"
-          } else {
-              Write-Error "File tvnpassword.exe NOT FOUND inside $installDir."
-          }
-              
-          Write-Host "Please copy the output of this step and paste it in the chat."
-          Write-Host "The workflow will now intentionally fail so we can read the log."
-          exit 1
-      
-      # Langkah-langkah di bawah ini tidak akan berjalan
       - name: Restart VNC Service
         run: |
-          Write-Host "Restarting TightVNC service to apply password..."
-          Stop-Service -Name "TightVNC Server" -ErrorAction SilentlyContinue -Force
+          Write-Host "Restarting UltraVNC service to apply password..."
+          # Nama layanan untuk UltraVNC adalah 'uvnc_service'
+          Stop-Service -Name "uvnc_service" -ErrorAction SilentlyContinue -Force
           Start-Sleep -Seconds 3
-          Start-Service -Name "TightVNC Server"
+          Start-Service -Name "uvnc_service"
           Write-Host "VNC Service restarted successfully."
 
       - name: Configure VNC Firewall
         run: |
+          # Port VNC sama (5900)
           netsh advfirewall firewall delete rule name="VNC-Tailscale"
           netsh advfirewall firewall add rule name="VNC-Tailscale" `
             dir=in action=allow protocol=TCP localport=5900

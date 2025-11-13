@@ -1,87 +1,97 @@
-name: VNC_TIPSUNIX
+name: VNC_FINAL_TIPSUNIX
 
 on:
   workflow_dispatch:
 
 jobs:
-  secure-vnc:
+  vnc:
     runs-on: windows-latest
     timeout-minutes: 3600
 
     steps:
+
       - name: Install TightVNC Server
         run: |
           $url = "https://www.tightvnc.com/download/2.8.81/tightvnc-2.8.81-gpl-setup-64bit.msi"
           $installer = "$env:TEMP\tightvnc.msi"
           Invoke-WebRequest -Uri $url -OutFile $installer
 
-          # Generate strong password
-          $password = -join ((33..126 | ForEach-Object {[char]$_}) | Get-Random -Count 12)
+          # Generate VNC password
+          $password = -join ((33..126 | % {[char]$_}) | Get-Random -Count 12)
           echo "VNC_PASSWORD=$password" >> $env:GITHUB_ENV
 
-          # Install TightVNC silently
-          Start-Process msiexec.exe -ArgumentList "/i `"$installer`" /quiet /norestart", `
-            "ADDLOCAL=Server" `
-            -Wait
-          
-          # Configure TightVNC password
-          $pass = $password
-          $passBytes = [Text.Encoding]::ASCII.GetBytes($pass)
-          $key = [byte[]](0x17,0x52,0x6B,0xC2,0x4A,0x4E,0x6B,0xC2) # VNC DES key
+          # Install TightVNC Server
+          Start-Process msiexec.exe -ArgumentList "/i `"$installer`" ADDLOCAL=Server /quiet /norestart" -Wait
+
+          # Apply password (DES-encrypted)
+          $passBytes = [Text.Encoding]::ASCII.GetBytes($password)
+          $key = [byte[]](0x17,0x52,0x6B,0xC2,0x4A,0x4E,0x6B,0xC2)
           $provider = New-Object System.Security.Cryptography.DESCryptoServiceProvider
           $provider.Key = $key
           $provider.Mode = "ECB"
-          $encryptor = $provider.CreateEncryptor()
-          $encPass = $encryptor.TransformFinalBlock($passBytes, 0, $passBytes.Length)
+          $enc = $provider.CreateEncryptor().TransformFinalBlock($passBytes,0,$passBytes.Length)
 
           New-Item -Path "HKLM:\Software\TightVNC\Server" -Force | Out-Null
-          Set-ItemProperty -Path "HKLM:\Software\TightVNC\Server" -Name "ControlPassword" -Type Binary -Value $encPass
-          Set-ItemProperty -Path "HKLM:\Software\TightVNC\Server" -Name "Password" -Type Binary -Value $encPass
-          
-          # Enable VNC service
-          Set-Service -Name tvnserver -StartupType Automatic
-          Start-Service -Name tvnserver
+          Set-ItemProperty "HKLM:\Software\TightVNC\Server" -Name Password -Value $enc -Type Binary
+          Set-ItemProperty "HKLM:\Software\TightVNC\Server" -Name ControlPassword -Value $enc -Type Binary
 
-      - name: Install Tailscale
-        run: |
-          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-latest-amd64.msi"
-          $installerPath = "$env:TEMP\tailscale.msi"
-          
-          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
-          Start-Process msiexec.exe -ArgumentList "/i `"$installerPath`" /quiet /norestart" -Wait
-          Remove-Item $installerPath -Force
+          # Start VNC service
+          Set-Service tvnserver -StartupType Automatic
+          Start-Service tvnserver
 
-      - name: Establish Tailscale Connection
+
+      - name: Download Tailscale (Standalone Binary)
         run: |
-          & "$env:ProgramFiles\Tailscale\tailscale.exe" up `
+          $url = "https://pkgs.tailscale.com/stable/tailscale-ipn-setup.exe"
+          Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\tailscale.exe"
+          
+          # Extract Windows standalone binary from installer
+          Start-Process -FilePath "$env:TEMP\tailscale.exe" `
+            -ArgumentList "/extract `"$env:TEMP\tailscale_extracted`" /quiet" -Wait
+
+          Copy-Item "$env:TEMP\tailscale_extracted\tailscale.exe" "C:\tailscale.exe"
+          Copy-Item "$env:TEMP\tailscale_extracted\tailscaled.exe" "C:\tailscaled.exe"
+
+
+      - name: Start Tailscale Userspace Daemon
+        run: |
+          Start-Process -FilePath "C:\tailscaled.exe" -ArgumentList "--cleanup" -Wait -ErrorAction SilentlyContinue
+
+          # Start userspace daemon in background
+          Start-Process -FilePath "C:\tailscaled.exe" -ArgumentList "--tun=userspace-networking" -WindowStyle Hidden
+
+          Start-Sleep -Seconds 3
+
+
+      - name: Run Tailscale UP (Userspace Mode)
+        run: |
+          C:\tailscale.exe up `
             --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} `
-            --hostname=vnc-gh-$env:GITHUB_RUN_ID
+            --hostname=vnc-final-$env:GITHUB_RUN_ID `
+            --accept-routes `
+            --accept-dns=false
 
-          $tsIP = $null
-          for ($i = 0; $i -lt 10; $i++) {
-            $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
-            if ($tsIP) { break }
-            Start-Sleep -Seconds 3
-          }
+          # Confirm status
+          C:\tailscale.exe status
 
-          if (-not $tsIP) {
-            Write-Error "Tailscale IP not assigned"
-            exit 1
-          }
+          # Fetch IP
+          $tsip = C:\tailscale.exe ip -4 | Select-Object -First 1
+          echo "TAILSCALE_IP=$tsip" >> $env:GITHUB_ENV
 
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Output Access Info
+      - name: Output Connection Info
         run: |
-          Write-Host "=== VNC VIA TAILSCALE ==="
-          Write-Host "Connect using any VNC client:"
-          Write-Host "Address: $env:TAILSCALE_IP:5900"
+          Write-Host "=============================="
+          Write-Host "     VNC via Tailscale FINAL"
+          Write-Host "=============================="
+          Write-Host "IP:      $env:TAILSCALE_IP"
+          Write-Host "Port:    5900"
           Write-Host "Password: $env:VNC_PASSWORD"
-          Write-Host "=========================="
+          Write-Host "=============================="
 
-      - name: Keep Alive
+      - name: Keep session alive
         run: |
           while ($true) {
-            Write-Host "$(Get-Date) - VNC Active"
+            Write-Host "$(Get-Date) Runner Active"
             Start-Sleep -Seconds 300
           }
